@@ -603,7 +603,7 @@
     if (session) uploadPending();
   }
   $("fileInput").addEventListener("change", (e) => { importFiles(e.target.files); e.target.value = ""; });
-  
+
   // ---------- Cloud (Supabase) ----------
   let sb = null;
   let session = null;
