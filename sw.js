@@ -7,15 +7,22 @@ const SHELL = [
   "/app.js",
   "/id3.js",
   "/config.js",
-  "/vendor/supabase.js",
+  // pustaka Supabase dari CDN di-cache terpisah (lihat LIB)
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/apple-touch-icon.png"
 ];
 
+const LIB = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js";
+
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE).then(async (c) => {
+      await c.addAll(SHELL);
+      try { await c.add(new Request(LIB, { mode: "no-cors" })); } catch (err) {}
+    }).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {
@@ -30,7 +37,18 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return; // Supabase & lainnya langsung ke jaringan
+  if (req.url === LIB) {
+    // Versi dipatok, jadi cukup cache-first
+    e.respondWith(
+      caches.match(req, { ignoreVary: true }).then((cached) => cached || fetch(req).then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(req, copy));
+        return res;
+      }))
+    );
+    return;
+  }
+  if (url.origin !== self.location.origin) return; // API Supabase langsung ke jaringan
 
   if (req.mode === "navigate") {
     e.respondWith(
