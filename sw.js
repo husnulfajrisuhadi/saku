@@ -1,5 +1,5 @@
 // Cache tampilan aplikasi supaya Saku tetap terbuka tanpa internet.
-const CACHE = "saku-v2";
+const CACHE = "saku-v3";
 const SHELL = [
   "/",
   "/index.html",
@@ -59,16 +59,13 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Stale-while-revalidate untuk file aplikasi
+  // File aplikasi: ambil versi terbaru dulu, pakai cache hanya saat offline
   e.respondWith(
-    caches.match(req).then((cached) => {
-      const net = fetch(req)
-        .then((res) => {
-          if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || net;
-    })
+    fetch(req)
+      .then((res) => {
+        if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+        return res;
+      })
+      .catch(() => caches.match(req))
   );
 });
