@@ -353,3 +353,8 @@ svg.kicon { width: 14px; height: 11px; fill: currentColor; }
 .stat { border: 2px dashed var(--ink-soft); padding: 8px; margin-bottom: 10px; font-size: 19px; }
 .tip { font-size: 17px; color: var(--ink-soft); border-left: 4px solid var(--ink); padding: 2px 0 2px 8px; margin: 12px 0 0; }
 .err { font-size: 18px; min-height: 18px; margin: 2px 0 8px; }
+
+.report { list-style: none; margin: 0 0 4px; padding: 0; max-height: 34dvh; overflow-y: auto; border-top: 2px solid var(--ink); }
+.report li { padding: 6px 2px; border-bottom: 1px dashed var(--ink-soft); }
+.report .rn { display: block; font-size: 19px; word-break: break-all; }
+.report .rw { display: block; font-size: 16px; color: var(--ink-soft); margin-top: 2px; }

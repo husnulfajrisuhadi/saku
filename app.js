@@ -33,7 +33,9 @@
   const bytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1e3) + " KB";
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const EXT_MIME = { mp3: "audio/mpeg", m4a: "audio/mp4", mp4: "audio/mp4", aac: "audio/aac", wav: "audio/wav", flac: "audio/flac", ogg: "audio/ogg", oga: "audio/ogg", webm: "audio/webm" };
+  const EXT_MIME = { mp3: "audio/mpeg", m4a: "audio/mp4", mp4: "audio/mp4", aac: "audio/aac", wav: "audio/wav", flac: "audio/flac", ogg: "audio/ogg", oga: "audio/ogg", opus: "audio/ogg", webm: "audio/webm", aif: "audio/aiff", aiff: "audio/aiff" };
+  // Format yang tidak bisa diputar browser di iPhone, supaya bisa dilaporkan dengan jelas
+  const UNSUPPORTED = { wma: "WMA", ape: "APE", wv: "WavPack", mid: "MIDI", midi: "MIDI", amr: "AMR", ra: "RealAudio", dsf: "DSD", dff: "DSD" };
   const extOf = (name) => (String(name).split(".").pop() || "").toLowerCase();
   function mimeFor(name, type) {
     const e = extOf(name);
@@ -41,7 +43,7 @@
     if (type && type.startsWith("audio/")) return type === "audio/mp3" ? "audio/mpeg" : type === "audio/x-m4a" ? "audio/mp4" : type;
     return "audio/mpeg";
   }
-  const extForMime = (m) => ({ "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/aac": "aac", "audio/wav": "wav", "audio/flac": "flac", "audio/ogg": "ogg", "audio/webm": "webm" }[m] || "mp3");
+  const extForMime = (m) => ({ "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/aac": "aac", "audio/wav": "wav", "audio/flac": "flac", "audio/ogg": "ogg", "audio/webm": "webm", "audio/aiff": "aiff" }[m] || "mp3");
   const isAudioFile = (f) => (f.type && f.type.startsWith("audio/")) || !!EXT_MIME[extOf(f.name)];
 
   let toastTimer;
@@ -556,15 +558,24 @@
     return m ? { artist: m[1].trim(), title: m[2].trim() } : { artist: "", title: base };
   }
 
+  // Lagu dianggap sama kalau ukuran file sama dan namanya sama (atau nama lama belum tercatat)
+  function findDuplicate(f) {
+    return tracks.find((t) => t.size === f.size && (!t.fileName || t.fileName === f.name));
+  }
+
   async function importFiles(fileList) {
-    const files = Array.from(fileList || []).filter(isAudioFile);
-    if (!files.length) { toast("Pilih file audio (MP3, M4A, dll.)"); return; }
+    const all = Array.from(fileList || []);
+    if (!all.length) return;
     if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
-    let added = 0;
+    const report = { picked: all.length, added: [], dupes: [], skipped: [], failed: [] };
     const base = Date.now();
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      toast(`Menambahkan ${i + 1}/${files.length}…`, 0);
+    for (let i = 0; i < all.length; i++) {
+      const f = all[i];
+      const ext = extOf(f.name);
+      if (UNSUPPORTED[ext]) { report.skipped.push({ name: f.name, why: `Format ${UNSUPPORTED[ext]} tidak didukung iPhone` }); continue; }
+      if (!isAudioFile(f)) { report.skipped.push({ name: f.name, why: "Bukan file audio" }); continue; }
+      if (findDuplicate(f)) { report.dupes.push(f.name); continue; }
+      toast(`Menambahkan ${i + 1}/${all.length}…`, 0);
       try {
         const id = uuid();
         const [tags, dur] = await Promise.all([window.readID3(f), durationOf(f)]);
@@ -576,6 +587,7 @@
           album: tags.album || "",
           duration: dur || 0,
           size: f.size,
+          fileName: f.name,
           mime: mimeFor(f.name, f.type),
           addedAt: base + i,
           local: true,
@@ -589,18 +601,33 @@
         }
         await idb.put("tracks", meta);
         tracks.push(meta);
-        added++;
+        report.added.push(f.name);
+        if (!dur) report.failed.push({ name: f.name, why: "Masuk, tapi durasinya tidak terbaca. Mungkin tidak bisa diputar", kept: true });
         if (i % 3 === 0) render();
       } catch (e) {
         console.error(e);
-        toast(`Gagal menambahkan ${f.name}`);
-        await sleep(1200);
+        const full = e && (e.name === "QuotaExceededError" || /quota/i.test(e.message || ""));
+        report.failed.push({ name: f.name, why: full ? "Penyimpanan perangkat penuh" : "Gagal disimpan (" + (e.message || e.name || "error") + ")" });
       }
     }
     render();
-    toast(`${added} lagu ditambahkan`);
     if (current) { baseQueue = sortedTracks().filter(playable).map((t) => t.id); }
-    if (session) uploadPending();
+    showImportReport(report);
+  }
+
+  function showImportReport(r) {
+    const notIn = r.skipped.length + r.failed.filter((x) => !x.kept).length;
+    if (!notIn && !r.dupes.length && !r.failed.length) { toast(`${r.added.length} lagu ditambahkan`); return; }
+    toast("");
+    $("toast").classList.remove("show");
+    const li = (name, why) => `<li><span class="rn">${esc(name)}</span><span class="rw">${esc(why)}</span></li>`;
+    const problems = [...r.skipped.map((x) => li(x.name, x.why)), ...r.failed.map((x) => li(x.name, x.why))];
+    openSheet(`<h3>Laporan impor</h3>
+      <div class="stat">Dipilih: <b>${r.picked} file</b><br>Ditambahkan: <b>${r.added.length}</b><br>Sudah ada (dilewati): <b>${r.dupes.length}</b><br>Tidak masuk: <b>${notIn}</b></div>
+      ${problems.length ? `<p class="sub">File yang bermasalah:</p><ul class="report">${problems.join("")}</ul>` : ""}
+      <p class="tip">Jumlah "Dipilih" lebih sedikit dari isi folder? Berarti jendela pilih file menyembunyikan format yang tidak dikenali. Ubah filter jenis file ke "All files" lalu pilih ulang semuanya. Lagu yang sudah ada akan dilewati otomatis.</p>
+      <button class="btn solid" style="width:100%;margin-top:12px" data-r="ok">OK</button>`);
+    $("sheetBody").onclick = (e) => { if (e.target.closest("[data-r]")) closeSheet(); };
   }
   $("fileInput").addEventListener("change", (e) => { importFiles(e.target.files); e.target.value = ""; });
 
@@ -649,7 +676,6 @@
         }
       }
       render();
-      await uploadPending();
       if (!quiet) toast("Sinkronisasi selesai");
     } catch (e) {
       console.error(e);
@@ -801,6 +827,102 @@
     }
   }
 
+  // ---------- Kosongkan library ----------
+  function resetPlayer() {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    current = null;
+    queue = []; baseQueue = []; qIndex = -1;
+    if (prefetched) { URL.revokeObjectURL(prefetched.url); prefetched = null; }
+    prefs.lastId = null; prefs.lastPos = 0;
+    savePrefs();
+    showNowPlaying();
+    setView("lib");
+  }
+  async function clearDevice() {
+    resetPlayer();
+    toast("Mengosongkan perangkat…", 0);
+    await tx("blobs", "readwrite", (st) => st.clear()).catch(() => {});
+    await tx("covers", "readwrite", (st) => st.clear()).catch(() => {});
+    for (const u of coverUrls.values()) URL.revokeObjectURL(u);
+    coverUrls.clear();
+    const keep = [];
+    for (const t of tracks) {
+      if (t.remote) { t.local = false; keep.push(t); }
+    }
+    await tx("tracks", "readwrite", (st) => st.clear()).catch(() => {});
+    for (const t of keep) await idb.put("tracks", t);
+    tracks = keep;
+    render();
+    toast(keep.length ? `Perangkat kosong. ${keep.length} lagu masih ada di cloud` : "Semua lagu di perangkat sudah dihapus");
+  }
+  async function clearCloud() {
+    if (!session) { toast("Masuk dulu"); return; }
+    toast("Menghapus semua lagu di cloud…", 0);
+    try {
+      const { data, error } = await sb.from(cfg.table).select("id, storage_path");
+      if (error) throw error;
+      const paths = data.map((r) => r.storage_path).filter(Boolean);
+      for (let i = 0; i < paths.length; i += 100) {
+        const r = await sb.storage.from(cfg.bucket).remove(paths.slice(i, i + 100));
+        if (r.error) throw r.error;
+      }
+      const ids = data.map((r) => r.id);
+      for (let i = 0; i < ids.length; i += 200) {
+        const d = await sb.from(cfg.table).delete().in("id", ids.slice(i, i + 200));
+        if (d.error) throw d.error;
+      }
+      for (const t of tracks.slice()) {
+        if (!t.remote) continue;
+        t.remote = false; t.storagePath = null;
+        if (!t.local) { if (current && current.id === t.id) resetPlayer(); await removeLocalMeta(t); }
+        else await idb.put("tracks", t);
+      }
+      render();
+      toast(`${data.length} lagu dihapus dari cloud`);
+    } catch (e) {
+      console.error(e);
+      toast("Gagal menghapus cloud: " + (e.message || e));
+      render();
+    }
+  }
+  function confirmBig(title, msg, label, fn) {
+    openSheet(`<h3>${esc(title)}</h3><p class="sub">${esc(msg)}</p>
+      <div class="row"><button class="btn" data-c="no">Batal</button><button class="btn solid" data-c="yes">${esc(label)}</button></div>`);
+    $("sheetBody").onclick = (e) => {
+      const b = e.target.closest("button[data-c]");
+      if (!b) return;
+      closeSheet();
+      if (b.dataset.c === "yes") fn();
+    };
+  }
+
+  // ---------- Menu utama ----------
+  function openMainMenu() {
+    const localN = tracks.filter((t) => t.local).length;
+    const remoteN = tracks.filter((t) => t.remote).length;
+    const items = [];
+    if (current) items.push(`<li><button data-m="track">Opsi lagu ini</button></li>`);
+    items.push(`<li><button data-m="add">Tambah / cek lagu yang belum masuk</button></li>`);
+    items.push(`<li><button data-m="cloud">Cloud & akun</button></li>`);
+    if (localN) items.push(`<li><button data-m="clearlocal" class="danger">Kosongkan perangkat (${localN} lagu)</button></li>`);
+    if (session && remoteN) items.push(`<li><button data-m="clearcloud" class="danger">Hapus semua di cloud (${remoteN} lagu)</button></li>`);
+    openSheet(`<h3>Menu</h3><ul class="menu">${items.join("")}</ul>`);
+    $("sheetBody").onclick = (e) => {
+      const b = e.target.closest("button[data-m]");
+      if (!b) return;
+      const m = b.dataset.m;
+      if (m === "track") openTrackMenu(current.id);
+      else if (m === "add") { closeSheet(); $("fileInput").click(); }
+      else if (m === "cloud") openAccount();
+      else if (m === "clearlocal") confirmBig("Kosongkan perangkat?", remoteN
+          ? `Semua file lagu di perangkat ini akan dihapus. Lagu yang sudah ada di cloud tetap aman dan bisa diunduh lagi. Lagu yang belum diunggah akan hilang.`
+          : `Semua ${localN} lagu di perangkat ini akan dihapus permanen.`, "Kosongkan", clearDevice);
+      else if (m === "clearcloud") confirmBig("Hapus semua di cloud?", `Semua ${remoteN} lagu di cloud akan dihapus permanen. Lagu yang sudah ada di perangkat ini tetap bisa diputar.`, "Hapus semua", clearCloud);
+    };
+  }
+
   // ---------- Sheet ----------
   function openSheet(html) {
     $("sheetBody").innerHTML = html;
@@ -896,7 +1018,7 @@
     const localN = tracks.filter((t) => t.local).length;
     if (!session) {
       openSheet(`<h3>Simpan ke cloud</h3>
-        <p class="sub">Tanpa login, lagu tetap tersimpan offline di perangkat ini. Login supaya lagu juga tersimpan di cloud dan bisa diunduh lagi kapan saja. Pakai akun yang sama dengan Lajur.</p>
+        <p class="sub">Tanpa login, lagu tetap tersimpan offline di perangkat ini. Login (pakai akun Lajur) supaya lagu bisa dicadangkan ke cloud dan diunduh lagi di perangkat lain. Unggahan tidak otomatis: pilih sendiri lewat tombol UNGGAH setelah login. Kuota cloud gratis 1 GB.</p>
         <form id="loginForm">
           <label class="field"><span>Email</span><input type="email" name="email" autocomplete="email" required></label>
           <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
@@ -916,7 +1038,7 @@
         $("loginBtn").disabled = false;
         if (error) { $("loginErr").textContent = error.message === "Invalid login credentials" ? "Email atau password salah" : error.message; return; }
         closeSheet();
-        toast("Berhasil masuk, menyinkronkan…");
+        toast("Berhasil masuk");
         setTimeout(() => sync(), 300);
       };
       return;
@@ -930,6 +1052,7 @@
       ${storageLine}
       <div class="row" style="margin-bottom:10px">
         <button class="btn solid" data-a="sync">Sinkron</button>
+        ${notUp ? `<button class="btn" data-a="up">Unggah ${notUp}</button>` : ""}
         ${notDl ? `<button class="btn" data-a="dl">Unduh semua</button>` : ""}
       </div>
       <button class="btn" style="width:100%" data-a="logout">Keluar</button>
@@ -940,6 +1063,7 @@
       closeSheet();
       if (b.dataset.a === "sync") sync();
       else if (b.dataset.a === "dl") downloadAll();
+      else if (b.dataset.a === "up") uploadPending();
       else if (b.dataset.a === "logout") {
         await sb.auth.signOut();
         toast("Keluar. Lagu di perangkat tetap ada.");
@@ -981,10 +1105,7 @@
     if (!current) { toast("Belum ada lagu yang diputar"); return; }
     setView("now");
   });
-  $("btnMenu").addEventListener("click", () => {
-    if (current) openTrackMenu(current.id);
-    else openAccount();
-  });
+  $("btnMenu").addEventListener("click", openMainMenu);
   $("btnPlay").addEventListener("click", togglePlay);
   $("btnNext").addEventListener("click", () => next(false));
   $("btnPrev").addEventListener("click", prev);
