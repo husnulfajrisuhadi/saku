@@ -3,148 +3,129 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Putar</title>
-  <meta name="theme-color" content="#0E0F13">
+  <title>Saku</title>
+  <meta name="theme-color" content="#1c1d21">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Putar">
+  <meta name="apple-mobile-web-app-title" content="Saku">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="icon" href="/icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=VT323&display=swap">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div id="app">
-    <header class="topbar">
+  <main class="device">
+    <!-- Kepala perangkat -->
+    <header class="dev-top">
       <div class="brand">
-        <img src="/icons/icon-192.png" alt="" width="28" height="28">
-        <h1>Putar</h1>
+        <span class="logo">SAKU</span>
+        <span class="model">DIGITAL AUDIO PLAYER</span>
       </div>
-      <div class="top-actions">
-        <button class="icon-btn" id="btnAccount" aria-label="Akun dan sinkronisasi">
-          <svg viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.5a4 4 0 0 1-.5 9.5H7Z"/></svg>
-          <span class="dot" id="cloudDot" hidden></span>
-        </button>
-        <label class="icon-btn primary" aria-label="Tambah lagu">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg" multiple hidden>
-        </label>
+      <div class="dev-top-right">
+        <span class="led" id="led" aria-hidden="true"></span>
+        <button class="tiny-key" id="btnAccount" aria-label="Akun dan cloud">CLOUD<span class="dot" id="cloudDot" hidden></span></button>
       </div>
     </header>
 
-    <div class="search">
-      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-      <input type="search" id="search" placeholder="Cari judul atau artis" autocomplete="off">
-    </div>
+    <!-- Layar LCD -->
+    <section class="bezel">
+      <div class="lcd" id="lcd">
+        <div class="lcd-status">
+          <span class="st-view" id="stView">LAGU</span>
+          <span class="st-icons">
+            <span id="stShuf" class="st-off">ACAK</span>
+            <span id="stRep" class="st-off">ULANG</span>
+            <span id="stCloud" class="st-off">SYNC</span>
+          </span>
+          <span class="st-clock" id="stClock">--:--</span>
+          <span class="batt" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
 
-    <div class="list-head">
-      <span id="countLabel">0 lagu</span>
-      <div class="list-head-actions">
-        <button class="chip" id="btnShuffleAll">
-          <svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-          Acak semua
-        </button>
-        <button class="chip" id="btnSort">Terbaru</button>
-      </div>
-    </div>
+        <!-- Tampilan daftar lagu -->
+        <div class="view" id="viewLib">
+          <div class="lcd-search">
+            <span>&gt;</span>
+            <input type="search" id="search" placeholder="CARI JUDUL/ARTIS" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="lib-head">
+            <span id="countLabel">0 LAGU</span>
+            <span class="lib-actions">
+              <button class="lcd-btn" id="btnSort">BARU</button>
+              <button class="lcd-btn" id="btnShuffleAll">ACAK SEMUA</button>
+            </span>
+          </div>
+          <div class="cloud-banner" id="cloudBanner" hidden>
+            <span id="cloudBannerTitle">0 LAGU DI CLOUD</span>
+            <button class="lcd-btn inv" id="btnDownloadAll">UNDUH</button>
+          </div>
+          <ul class="tracks" id="trackList"></ul>
+          <div class="empty" id="emptyState" hidden>
+            <svg class="pix-note" viewBox="0 0 10 8" aria-hidden="true" shape-rendering="crispEdges"><path d="M4 0h6v2H4zM4 2h1v3H4zM9 2h1v3H9zM2 5h3v2H2zM1 6h1v1H1zM7 5h3v2H7zM6 6h1v1H6zM2 7h2v1H2zM7 7h2v1H7z"/></svg>
+            <p>BELUM ADA LAGU</p>
+            <p class="sub">Tekan tombol <b>+ TAMBAH</b> di bawah untuk memasukkan MP3 dari iPhone. Lagu disimpan di perangkat ini dan bisa diputar tanpa internet.</p>
+          </div>
+        </div>
 
-    <div class="cloud-banner" id="cloudBanner" hidden>
-      <div>
-        <strong id="cloudBannerTitle">Lagu di cloud</strong>
-        <span id="cloudBannerText"></span>
-      </div>
-      <button class="chip accent" id="btnDownloadAll">Unduh semua</button>
-    </div>
+        <!-- Tampilan sedang diputar -->
+        <div class="view" id="viewNow" hidden>
+          <div class="now-top">
+            <div class="now-cover" id="nowCover"></div>
+            <div class="now-side">
+              <div class="now-index" id="nowIndex">000/000</div>
+              <div class="viz" id="viz" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="now-fmt" id="nowFmt">MP3</div>
+            </div>
+          </div>
+          <div class="marquee"><span id="nowTitle">TIDAK ADA LAGU</span></div>
+          <div class="now-artist" id="nowArtist">-</div>
+          <div class="now-album" id="nowAlbum"></div>
+          <div class="seek">
+            <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Posisi lagu">
+            <div class="times"><span id="tCur">0:00</span><span id="tState">STOP</span><span id="tDur">0:00</span></div>
+          </div>
+        </div>
 
-    <ul class="tracks" id="trackList"></ul>
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      </div>
+    </section>
 
-    <div class="empty" id="emptyState" hidden>
-      <div class="empty-art">
-        <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    <!-- Tombol fisik -->
+    <section class="pad">
+      <div class="pad-row small">
+        <button class="key" id="btnView"><svg class="kicon" viewBox="0 0 12 10" shape-rendering="crispEdges"><path d="M0 0h2v2H0zM3 0h9v2H3zM0 4h2v2H0zM3 4h9v2H3zM0 8h2v2H0zM3 8h9v2H3z"/></svg><span class="klabel" id="btnViewLabel">PEMUTAR</span></button>
+        <button class="key" id="btnMenu"><svg class="kicon" viewBox="0 0 12 10" shape-rendering="crispEdges"><path d="M0 4h2v2H0zM5 4h2v2H5zM10 4h2v2h-2z"/></svg><span class="klabel">MENU</span></button>
+        <label class="key accent-soft"><svg class="kicon" viewBox="0 0 12 10" shape-rendering="crispEdges"><path d="M5 0h2v10H5zM1 4h10v2H1z"/></svg><span class="klabel">TAMBAH</span>
+          <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg" multiple hidden>
+        </label>
       </div>
-      <h2>Belum ada lagu</h2>
-      <p>Tambahkan file MP3 dari iPhone kamu. Lagu disimpan di perangkat ini, jadi bisa diputar tanpa internet.</p>
-      <label class="btn-primary">
-        Tambah lagu
-        <input type="file" id="fileInput2" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg" multiple hidden>
-      </label>
-    </div>
-  </div>
+      <div class="pad-row transport">
+        <button class="key round" id="btnPrev" aria-label="Sebelumnya">
+          <svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>
+        </button>
+        <button class="key play" id="btnPlay" aria-label="Putar atau jeda"></button>
+        <button class="key round" id="btnNext" aria-label="Berikutnya">
+          <svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
+        </button>
+      </div>
+      <div class="pad-row small">
+        <button class="key" id="btnBack10"><span class="kicon">«10</span><span class="klabel">MUNDUR</span></button>
+        <button class="key" id="btnShuffle"><span class="kicon lamp"></span><span class="klabel">ACAK</span></button>
+        <button class="key" id="btnRepeat"><span class="kicon lamp"></span><span class="klabel" id="btnRepeatLabel">ULANG</span></button>
+        <button class="key" id="btnFwd10"><span class="kicon">10»</span><span class="klabel">MAJU</span></button>
+      </div>
+      <div class="grille" aria-hidden="true"></div>
+    </section>
+  </main>
 
-  <!-- Mini player -->
-  <div class="mini" id="mini" hidden>
-    <div class="mini-progress"><div id="miniBar"></div></div>
-    <button class="mini-main" id="miniOpen" aria-label="Buka pemutar">
-      <div class="cover sm" id="miniCover"></div>
-      <div class="mini-text">
-        <div class="t" id="miniTitle">-</div>
-        <div class="a" id="miniArtist">-</div>
-      </div>
-    </button>
-    <button class="icon-btn ghost" id="miniPlay" aria-label="Putar atau jeda"></button>
-    <button class="icon-btn ghost" id="miniNext" aria-label="Lagu berikutnya">
-      <svg viewBox="0 0 24 24" class="fill"><path d="M5 5.5v13a1 1 0 0 0 1.5.86L16 13.6V18a1 1 0 0 0 2 0V6a1 1 0 0 0-2 0v4.4L6.5 4.64A1 1 0 0 0 5 5.5Z"/></svg>
-    </button>
-  </div>
-
-  <!-- Full player -->
-  <section class="player" id="player" aria-hidden="true">
-    <div class="player-bg" id="playerBg"></div>
-    <div class="player-inner">
-      <div class="player-top">
-        <button class="icon-btn ghost" id="playerClose" aria-label="Tutup">
-          <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
-        </button>
-        <span class="player-label">Sedang diputar</span>
-        <button class="icon-btn ghost" id="playerMore" aria-label="Opsi lagu">
-          <svg viewBox="0 0 24 24" class="fill"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
-        </button>
-      </div>
-      <div class="cover lg" id="playerCover"></div>
-      <div class="player-meta">
-        <div class="t" id="playerTitle">-</div>
-        <div class="a" id="playerArtist">-</div>
-      </div>
-      <div class="seek">
-        <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Posisi lagu">
-        <div class="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
-      </div>
-      <div class="controls">
-        <button class="icon-btn ghost toggle" id="btnShuffle" aria-label="Acak">
-          <svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-        </button>
-        <button class="icon-btn ghost big" id="btnPrev" aria-label="Sebelumnya">
-          <svg viewBox="0 0 24 24" class="fill"><path d="M19 5.5v13a1 1 0 0 1-1.5.86L8 13.6V18a1 1 0 0 1-2 0V6a1 1 0 0 1 2 0v4.4l9.5-5.76A1 1 0 0 1 19 5.5Z"/></svg>
-        </button>
-        <button class="play-btn" id="btnPlay" aria-label="Putar atau jeda"></button>
-        <button class="icon-btn ghost big" id="btnNext" aria-label="Berikutnya">
-          <svg viewBox="0 0 24 24" class="fill"><path d="M5 5.5v13a1 1 0 0 0 1.5.86L16 13.6V18a1 1 0 0 0 2 0V6a1 1 0 0 0-2 0v4.4L6.5 4.64A1 1 0 0 0 5 5.5Z"/></svg>
-        </button>
-        <button class="icon-btn ghost toggle" id="btnRepeat" aria-label="Ulangi">
-          <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg>
-          <span class="badge" id="repeatOne" hidden>1</span>
-        </button>
-      </div>
-      <div class="skip-row">
-        <button class="chip" id="btnBack10">
-          <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> 10 dtk
-        </button>
-        <button class="chip" id="btnFwd10">
-          10 dtk <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-        </button>
-      </div>
-    </div>
-  </section>
-
-  <!-- Bottom sheet -->
+  <!-- Jendela menu (gaya LCD) -->
   <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
   <div class="sheet" id="sheet" aria-hidden="true">
-    <div class="sheet-handle"></div>
     <div id="sheetBody"></div>
   </div>
-
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <audio id="audio" preload="auto" playsinline></audio>
 

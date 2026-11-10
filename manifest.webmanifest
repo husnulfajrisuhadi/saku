@@ -1,13 +1,13 @@
 {
-  "name": "Putar",
-  "short_name": "Putar",
-  "description": "Pemutar musik offline untuk lagu milikmu sendiri.",
+  "name": "Saku",
+  "short_name": "Saku",
+  "description": "Saku: pemutar MP3 offline bergaya retro untuk lagu milikmu sendiri.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0E0F13",
-  "theme_color": "#0E0F13",
+  "background_color": "#1C1D21",
+  "theme_color": "#1C1D21",
   "lang": "id",
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },

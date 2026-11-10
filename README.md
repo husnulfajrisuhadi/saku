@@ -1,6 +1,6 @@
-# Putar
+# Saku
 
-Pemutar musik web, mobile-first, untuk file lagu milik sendiri.
+Pemutar MP3 web bergaya retro (layar LCD + tombol fisik), mobile-first, untuk file lagu milik sendiri.
 
 - Impor MP3/M4A/AAC/WAV/FLAC dari iPhone, tersimpan offline di browser (IndexedDB).
 - Kontrol di lock screen & Control Center (Media Session API): play/pause, next, previous, scrub.
@@ -13,6 +13,7 @@ Pemutar musik web, mobile-first, untuk file lagu milik sendiri.
 Static site tanpa build step. Deploy apa adanya (Vercel).
 
 - `index.html`, `styles.css`, `app.js`, `id3.js`
+- Font VT323 dan Silkscreen dari Google Fonts (SIL Open Font License), di-cache service worker
 - `config.js`: URL dan publishable key Supabase
 - `sw.js`: cache tampilan untuk offline
 - Supabase: tabel `public.putar_tracks` + bucket privat `putar` (RLS per user, file di folder `<user_id>/`)

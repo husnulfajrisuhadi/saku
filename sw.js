@@ -1,5 +1,5 @@
-// Cache tampilan aplikasi supaya Putar tetap terbuka tanpa internet.
-const CACHE = "putar-v1";
+// Cache tampilan aplikasi supaya Saku tetap terbuka tanpa internet.
+const CACHE = "saku-v2";
 const SHELL = [
   "/",
   "/index.html",
@@ -37,8 +37,8 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (req.url === LIB) {
-    // Versi dipatok, jadi cukup cache-first
+  if (req.url === LIB || url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
+    // Pustaka & font: versi tetap, jadi cukup cache-first
     e.respondWith(
       caches.match(req, { ignoreVary: true }).then((cached) => cached || fetch(req).then((res) => {
         const copy = res.clone();

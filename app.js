@@ -173,49 +173,75 @@
     const list = visibleTracks();
     const total = tracks.length;
     const localCount = tracks.filter((t) => t.local).length;
-    $("countLabel").textContent = query ? `${list.length} dari ${total} lagu` : `${total} lagu`;
+    $("countLabel").textContent = query ? `${list.length}/${total} LAGU` : `${total} LAGU`;
     $("emptyState").hidden = total > 0;
-    $("btnSort").textContent = prefs.sort === "az" ? "A–Z" : "Terbaru";
+    $("btnSort").textContent = prefs.sort === "az" ? "A-Z" : "BARU";
     $("btnShuffleAll").disabled = localCount === 0;
 
     const remoteOnly = tracks.filter((t) => !t.local && t.remote).length;
     $("cloudBanner").hidden = remoteOnly === 0;
-    $("cloudBannerTitle").textContent = `${remoteOnly} lagu belum diunduh`;
-    $("cloudBannerText").textContent = "Unduh supaya bisa diputar offline.";
+    $("cloudBannerTitle").textContent = `${remoteOnly} LAGU BELUM DIUNDUH`;
 
     const playingId = current?.id;
-    $("trackList").innerHTML = list.map((t) => {
+    $("trackList").innerHTML = list.map((t, i) => {
       const cls = ["track"];
       if (t.id === playingId) cls.push("playing");
       if (!t.local) cls.push("remote");
-      let state = "";
-      if (busy.has(t.id)) state = ICON.spin;
-      else if (t.id === playingId) state = `<span class="eq ${audio.paused ? "paused" : ""}"><i></i><i></i><i></i></span>`;
-      else if (!t.local) state = ICON.cloud;
-      const sub = [t.artist || "Artis tidak diketahui", t.duration ? fmt(t.duration) : ""].filter(Boolean).join(" · ");
+      if (busy.has(t.id)) cls.push("busy");
+      const no = t.id === playingId ? (audio.paused ? "||" : "&gt;") : String(i + 1).padStart(2, "0");
+      const d = busy.has(t.id) ? "...." : t.duration ? fmt(t.duration) : "--:--";
       return `<li class="${cls.join(" ")}" data-id="${t.id}">
-        <div class="cover sm" style="${coverStyle(t)}">${coverUrls.get(t.id) ? "" : initial(t)}</div>
-        <div class="info"><div class="t">${esc(t.title)}</div><div class="a">${esc(sub)}</div></div>
-        <span class="state">${state}</span>
-        <button class="more" data-more="${t.id}" aria-label="Opsi">${ICON.more}</button>
+        <span class="no">${no}</span>
+        <div class="info"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || "Artis tidak diketahui")}</div></div>
+        <span class="d">${d}</span>
+        <button class="more" data-more="${t.id}" aria-label="Opsi">[:]</button>
       </li>`;
     }).join("");
     $("cloudDot").hidden = !session;
+    $("stCloud").className = session ? "" : "st-off";
   }
 
   // ---------- Pemutar ----------
   function setPlayIcons() {
-    const icon = audio.paused ? ICON.play : ICON.pause;
-    $("btnPlay").innerHTML = icon;
-    $("miniPlay").innerHTML = icon;
-    $("player").classList.toggle("paused", audio.paused);
-    document.querySelectorAll(".track .eq").forEach((e) => e.classList.toggle("paused", audio.paused));
-    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = current ? (audio.paused ? "paused" : "playing") : "none";
+    const playing = !audio.paused;
+    $("btnPlay").innerHTML = playing ? ICON.pause : ICON.play;
+    $("led").classList.toggle("on", playing);
+    $("viz").classList.toggle("paused", !playing);
+    $("viz").classList.toggle("stopped", !current);
+    $("tState").textContent = !current ? "STOP" : playing ? "PLAY" : "PAUSE";
+    const row = current && document.querySelector(`.track[data-id="${current.id}"] .no`);
+    if (row) row.innerHTML = playing ? "&gt;" : "||";
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = current ? (playing ? "playing" : "paused") : "none";
   }
   function setModeIcons() {
     $("btnShuffle").classList.toggle("on", prefs.shuffle);
     $("btnRepeat").classList.toggle("on", prefs.repeat !== "off");
-    $("repeatOne").hidden = prefs.repeat !== "one";
+    $("btnRepeatLabel").textContent = prefs.repeat === "one" ? "ULANG 1" : "ULANG";
+    $("stShuf").className = prefs.shuffle ? "" : "st-off";
+    $("stRep").className = prefs.repeat !== "off" ? "" : "st-off";
+    $("stRep").textContent = prefs.repeat === "one" ? "ULANG1" : "ULANG";
+  }
+
+  // Pindah tampilan LCD: daftar lagu <-> sedang diputar
+  let view = "lib";
+  function setView(v) {
+    view = v === "now" && current ? "now" : "lib";
+    $("viewLib").hidden = view !== "lib";
+    $("viewNow").hidden = view !== "now";
+    $("stView").textContent = view === "now" ? "PUTAR" : "LAGU";
+    $("btnViewLabel").textContent = view === "now" ? "DAFTAR" : "PEMUTAR";
+    if (view === "now") fitMarquee();
+  }
+  function fitMarquee() {
+    const span = $("nowTitle");
+    const box = span.parentElement;
+    span.classList.remove("scroll");
+    span.textContent = span.dataset.text || "";
+    if (span.scrollWidth > box.clientWidth) {
+      span.textContent = (span.dataset.text || "") + "   *   " + (span.dataset.text || "") + "   *   ";
+      span.style.setProperty("--dur", Math.max(6, (span.dataset.text || "").length * 0.35) + "s");
+      span.classList.add("scroll");
+    }
   }
 
   function buildQueue(startId, list) {
@@ -273,7 +299,7 @@
       navigator.mediaSession.metadata = new MediaMetadata({
         title: current.title,
         artist: current.artist || "",
-        album: current.album || "Putar",
+        album: current.album || "Saku",
         artwork
       });
     } catch (e) {}
@@ -319,19 +345,30 @@
 
   function showNowPlaying() {
     const t = current;
-    $("mini").hidden = !t;
-    if (!t) return;
-    $("miniTitle").textContent = t.title;
-    $("miniArtist").textContent = t.artist || "Artis tidak diketahui";
-    $("playerTitle").textContent = t.title;
-    $("playerArtist").textContent = t.artist || "Artis tidak diketahui";
-    paintCover($("miniCover"), t);
-    paintCover($("playerCover"), t);
+    const cover = $("nowCover");
+    if (!t) {
+      $("nowTitle").dataset.text = "TIDAK ADA LAGU";
+      $("nowArtist").textContent = "-";
+      $("nowAlbum").textContent = "";
+      $("nowIndex").textContent = "000/000";
+      cover.style.backgroundImage = "";
+      cover.classList.remove("has-art");
+      fitMarquee();
+      setPlayIcons();
+      render();
+      return;
+    }
+    $("nowTitle").dataset.text = t.title;
+    $("nowArtist").textContent = t.artist || "Artis tidak diketahui";
+    $("nowAlbum").textContent = t.album || "";
+    const pos = queue.indexOf(t.id) + 1;
+    const pad = (n) => String(n).padStart(3, "0");
+    $("nowIndex").textContent = `${pad(pos || 1)}/${pad(queue.length || 1)}`;
+    $("nowFmt").textContent = `${extForMime(t.mime || "audio/mpeg").toUpperCase()} ${t.size ? "· " + bytes(t.size) : ""}`;
     const u = coverUrls.get(t.id);
-    const bg = $("playerBg");
-    bg.style.background = "";
-    if (u) bg.style.backgroundImage = `url('${u}')`;
-    else bg.style.background = `radial-gradient(circle at 50% 30%, hsl(${hash(t.title + (t.artist || "")) % 360} 60% 40%), transparent 70%)`;
+    cover.style.backgroundImage = u ? `url('${u}')` : "";
+    cover.classList.toggle("has-art", !!u);
+    fitMarquee();
     setPlayIcons();
     render();
   }
@@ -341,12 +378,11 @@
     if (!t) return;
     buildQueue(id, visibleTracks());
     if (!t.local) {
-      downloadTrack(t).then(() => {
-        if (t.local) { buildQueue(id, visibleTracks()); loadTrack(id, true); }
+      return downloadTrack(t).then(() => {
+        if (t.local) { buildQueue(id, visibleTracks()); return loadTrack(id, true); }
       });
-      return;
     }
-    loadTrack(id, true);
+    return loadTrack(id, true);
   }
 
   function togglePlay() {
@@ -414,6 +450,7 @@
       }
       if (prefetched) { URL.revokeObjectURL(prefetched.url); prefetched = null; }
       prefetchNext();
+      showNowPlaying();
     }
     toast(prefs.shuffle ? "Acak aktif" : "Acak mati", 1200);
   }
@@ -449,7 +486,6 @@
   audio.addEventListener("timeupdate", () => {
     const d = audio.duration, c = audio.currentTime;
     const p = isFinite(d) && d > 0 ? (c / d) * 100 : 0;
-    $("miniBar").style.width = p + "%";
     if (!seeking) {
       $("seek").value = Math.round(p * 10);
       $("seek").style.setProperty("--p", p + "%");
@@ -567,8 +603,7 @@
     if (session) uploadPending();
   }
   $("fileInput").addEventListener("change", (e) => { importFiles(e.target.files); e.target.value = ""; });
-  $("fileInput2").addEventListener("change", (e) => { importFiles(e.target.files); e.target.value = ""; });
-
+  
   // ---------- Cloud (Supabase) ----------
   let sb = null;
   let session = null;
@@ -719,7 +754,7 @@
       prefs.lastId = null;
       savePrefs();
       if (wasPlaying && queue.length) { qIndex = Math.min(qIndex, queue.length - 1); loadTrack(queue[qIndex], true); }
-      else { $("mini").hidden = true; closePlayer(); setPlayIcons(); }
+      else { showNowPlaying(); setView("lib"); }
     } else {
       queue = queue.filter((id) => id !== t.id);
       baseQueue = baseQueue.filter((id) => id !== t.id);
@@ -780,19 +815,18 @@
   $("sheetBackdrop").addEventListener("click", closeSheet);
 
   function trackHeader(t) {
-    return `<div class="sheet-track"><div class="cover sm" style="${coverStyle(t)}">${coverUrls.get(t.id) ? "" : initial(t)}</div>
-      <div><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || "Artis tidak diketahui")}${t.size ? " · " + bytes(t.size) : ""}</div></div></div>`;
+    return `<div class="sheet-track"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || "Artis tidak diketahui")}${t.size ? " · " + bytes(t.size) : ""}${t.remote ? " · CLOUD" : ""}</div></div>`;
   }
   function openTrackMenu(id) {
     const t = byId(id);
     if (!t) return;
     const items = [];
-    if (t.local) items.push(`<li><button data-act="playnext">${ICON.next}Putar berikutnya</button></li>`);
-    items.push(`<li><button data-act="rename">${ICON.edit}Ubah judul & artis</button></li>`);
-    if (!t.local && t.remote) items.push(`<li><button data-act="download">${ICON.cloud}Unduh untuk offline</button></li>`);
-    if (t.local && !t.remote && session) items.push(`<li><button data-act="upload">${ICON.upload}Simpan ke cloud</button></li>`);
-    if (t.local) items.push(`<li><button data-act="dellocal" class="${t.remote ? "" : "danger"}">${t.remote ? ICON.phone : ICON.trash}${t.remote ? "Hapus dari perangkat (tetap di cloud)" : "Hapus lagu"}</button></li>`);
-    if (t.remote) items.push(`<li><button data-act="delall" class="danger">${ICON.trash}Hapus dari semua tempat</button></li>`);
+    if (t.local) items.push(`<li><button data-act="playnext">Putar berikutnya</button></li>`);
+    items.push(`<li><button data-act="rename">Ubah judul & artis</button></li>`);
+    if (!t.local && t.remote) items.push(`<li><button data-act="download">Unduh untuk offline</button></li>`);
+    if (t.local && !t.remote && session) items.push(`<li><button data-act="upload">Simpan ke cloud</button></li>`);
+    if (t.local) items.push(`<li><button data-act="dellocal" class="${t.remote ? "" : "danger"}">${t.remote ? "Hapus dari perangkat (tetap di cloud)" : "Hapus lagu"}</button></li>`);
+    if (t.remote) items.push(`<li><button data-act="delall" class="danger">Hapus dari semua tempat</button></li>`);
     openSheet(`${trackHeader(t)}<ul class="menu">${items.join("")}</ul>`);
     $("sheetBody").onclick = async (e) => {
       const b = e.target.closest("button[data-act]");
@@ -822,7 +856,7 @@
   }
   function confirmSheet(t, msg, fn) {
     openSheet(`${trackHeader(t)}<p class="sub">${esc(msg)}</p>
-      <div class="row"><button class="btn-secondary" data-c="no">Batal</button><button class="btn-primary" data-c="yes" style="background:#ff6b6b">Hapus</button></div>`);
+      <div class="row"><button class="btn" data-c="no">Batal</button><button class="btn solid" data-c="yes">Hapus</button></div>`);
     $("sheetBody").onclick = (e) => {
       const b = e.target.closest("button[data-c]");
       if (!b) return;
@@ -835,7 +869,7 @@
       <form id="renameForm">
         <label class="field"><span>Judul</span><input name="title" value="${esc(t.title)}" required></label>
         <label class="field"><span>Artis</span><input name="artist" value="${esc(t.artist || "")}"></label>
-        <div class="row"><button type="button" class="btn-secondary" id="rnCancel">Batal</button><button class="btn-primary">Simpan</button></div>
+        <div class="row"><button type="button" class="btn" id="rnCancel">Batal</button><button class="btn solid">Simpan</button></div>
       </form>`);
     $("sheetBody").onclick = null;
     $("rnCancel").onclick = closeSheet;
@@ -867,7 +901,7 @@
           <label class="field"><span>Email</span><input type="email" name="email" autocomplete="email" required></label>
           <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
           <div class="err" id="loginErr"></div>
-          <button class="btn-primary" style="width:100%" id="loginBtn">Masuk</button>
+          <button class="btn solid" style="width:100%" id="loginBtn">Masuk</button>
         </form>
         <div style="margin-top:14px">${storageLine}<div class="stat">Di perangkat: <b>${localN} lagu</b></div></div>
         ${tip}`);
@@ -895,10 +929,10 @@
       <div class="stat">Di cloud: <b>${remoteN} lagu</b> · Di perangkat: <b>${localN} lagu</b>${notDl ? `<br>${notDl} lagu belum diunduh` : ""}${notUp ? `<br>${notUp} lagu belum diunggah` : ""}</div>
       ${storageLine}
       <div class="row" style="margin-bottom:10px">
-        <button class="btn-primary" data-a="sync">Sinkronkan</button>
-        ${notDl ? `<button class="btn-secondary" data-a="dl">Unduh semua</button>` : ""}
+        <button class="btn solid" data-a="sync">Sinkron</button>
+        ${notDl ? `<button class="btn" data-a="dl">Unduh semua</button>` : ""}
       </div>
-      <button class="btn-secondary" style="width:100%" data-a="logout">Keluar</button>
+      <button class="btn" style="width:100%" data-a="logout">Keluar</button>
       ${tip}`);
     $("sheetBody").onclick = async (e) => {
       const b = e.target.closest("button[data-a]");
@@ -913,31 +947,12 @@
     };
   }
 
-  // ---------- Player full screen ----------
-  function openPlayer() {
-    if (!current) return;
-    $("player").classList.add("open");
-    $("player").setAttribute("aria-hidden", "false");
-  }
-  function closePlayer() {
-    $("player").classList.remove("open");
-    $("player").setAttribute("aria-hidden", "true");
-  }
-  // Geser ke bawah untuk menutup
-  (() => {
-    let y0 = null;
-    const el = $("player");
-    el.addEventListener("touchstart", (e) => {
-      if (e.target.closest(".seek") || e.target.closest(".controls")) { y0 = null; return; }
-      y0 = e.touches[0].clientY;
-    }, { passive: true });
-    el.addEventListener("touchend", (e) => {
-      if (y0 == null) return;
-      const dy = e.changedTouches[0].clientY - y0;
-      if (dy > 110) closePlayer();
-      y0 = null;
-    }, { passive: true });
-  })();
+  // ---------- Tampilan ----------
+  const openPlayer = () => setView("now");
+  const closePlayer = () => setView("lib");
+  setInterval(() => { const d = new Date(); $("stClock").textContent = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }, 15000);
+  { const d = new Date(); $("stClock").textContent = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+  window.addEventListener("resize", () => view === "now" && fitMarquee());
 
   // ---------- Event UI ----------
   $("trackList").addEventListener("click", (e) => {
@@ -947,7 +962,7 @@
     if (!li) return;
     const id = li.dataset.id;
     if (current && current.id === id) { openPlayer(); if (audio.paused) audio.play().catch(() => {}); return; }
-    playFromList(id);
+    Promise.resolve(playFromList(id)).then(() => { if (current && current.id === id) openPlayer(); });
   });
   $("search").addEventListener("input", (e) => { query = e.target.value; render(); });
   $("btnSort").addEventListener("click", () => { prefs.sort = prefs.sort === "az" ? "new" : "az"; savePrefs(); render(); });
@@ -961,9 +976,15 @@
   });
   $("btnDownloadAll").addEventListener("click", downloadAll);
   $("btnAccount").addEventListener("click", openAccount);
-  $("miniOpen").addEventListener("click", openPlayer);
-  $("miniPlay").addEventListener("click", togglePlay);
-  $("miniNext").addEventListener("click", () => next(false));
+  $("btnView").addEventListener("click", () => {
+    if (view === "now") return setView("lib");
+    if (!current) { toast("Belum ada lagu yang diputar"); return; }
+    setView("now");
+  });
+  $("btnMenu").addEventListener("click", () => {
+    if (current) openTrackMenu(current.id);
+    else openAccount();
+  });
   $("btnPlay").addEventListener("click", togglePlay);
   $("btnNext").addEventListener("click", () => next(false));
   $("btnPrev").addEventListener("click", prev);
@@ -971,14 +992,33 @@
   $("btnRepeat").addEventListener("click", cycleRepeat);
   $("btnBack10").addEventListener("click", () => skip(-10));
   $("btnFwd10").addEventListener("click", () => skip(10));
-  $("playerClose").addEventListener("click", closePlayer);
-  $("playerMore").addEventListener("click", () => current && openTrackMenu(current.id));
+  // Getar halus di perangkat yang mendukung (Android); iPhone mengabaikannya
+  document.querySelectorAll(".key").forEach((k) => k.addEventListener("pointerdown", () => { try { navigator.vibrate && navigator.vibrate(8); } catch (e) {} }));
   window.addEventListener("online", () => sync({ quiet: true }));
+
+  // Geser kiri/kanan di layar untuk pindah tampilan
+  (() => {
+    let x0 = null, y0 = null;
+    const el = $("lcd");
+    el.addEventListener("touchstart", (e) => {
+      if (e.target.closest(".seek") || e.target.closest("input")) { x0 = null; return; }
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+    }, { passive: true });
+    el.addEventListener("touchend", (e) => {
+      if (x0 == null) return;
+      const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+      x0 = null;
+      if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      if (dx < 0 && view === "lib" && current) setView("now");
+      else if (dx > 0 && view === "now") setView("lib");
+    }, { passive: true });
+  })();
 
   // ---------- Mulai ----------
   async function init() {
     setModeIcons();
-    setPlayIcons();
+    showNowPlaying();
+    setView("lib");
     try {
       tracks = (await idb.all("tracks")) || [];
       const covers = await idb.entries("covers");
