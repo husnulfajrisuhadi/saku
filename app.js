@@ -1023,7 +1023,7 @@
         D.requestToken(true).then(() => {
           closeSheet();
           toast(`Masuk sebagai ${session ? session.email : "akun Google"}`);
-          sync();
+          D.ensureFolder().catch(() => {}).then(() => sync());
         }).catch((err) => { const el = $("loginErr"); if (el) el.textContent = err.message; });
       };
       return;
@@ -1048,7 +1048,7 @@
       if (!b) return;
       const a = b.dataset.a;
       closeSheet();
-      if (a === "sync") cloudAction(() => sync());
+      if (a === "sync") cloudAction(() => D.ensureFolder().catch(() => {}).then(() => sync()));
       else if (a === "dl") cloudAction(() => downloadAll());
       else if (a === "up") cloudAction(() => uploadPending());
       else if (a === "logout") { D.signOut(); toast("Keluar. Lagu di perangkat tetap ada."); }

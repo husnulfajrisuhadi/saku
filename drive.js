@@ -197,6 +197,7 @@
     configured, hasToken, withToken, requestToken, signOut,
     get user() { return user; },
     onChange: (fn) => listeners.add(fn),
-    list, upload, download, remove, removeAll, updateMeta
+    list, upload, download, remove, removeAll, updateMeta,
+    ensureFolder: () => folderId(true)
   };
 })();
