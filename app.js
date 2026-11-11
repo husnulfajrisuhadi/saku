@@ -1150,7 +1150,7 @@
       $("tCur").textContent = fmt(prefs.lastPos || 0);
     }
 
-    if (session && D.hasToken()) sync({ quiet: true });
+    if (session && D.hasToken()) D.ensureFolder().catch(() => {}).then(() => sync({ quiet: true }));
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
