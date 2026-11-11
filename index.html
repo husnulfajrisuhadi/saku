@@ -27,7 +27,7 @@
       </div>
       <div class="dev-top-right">
         <span class="led" id="led" aria-hidden="true"></span>
-        <button class="tiny-key" id="btnAccount" aria-label="Akun dan cloud">CLOUD<span class="dot" id="cloudDot" hidden></span></button>
+        <button class="tiny-key" id="btnAccount" aria-label="Google Drive dan akun">CLOUD<span class="dot" id="cloudDot" hidden></span></button>
       </div>
     </header>
 
@@ -129,9 +129,10 @@
 
   <audio id="audio" preload="auto" playsinline></audio>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="/config.js"></script>
   <script src="/id3.js"></script>
+  <script src="/drive.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

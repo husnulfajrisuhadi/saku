@@ -1,7 +1,8 @@
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const cfg = window.PUTAR_CONFIG;
+  const cfg = window.SAKU_CONFIG || {};
+  const D = window.SakuDrive;
   const audio = $("audio");
 
   // ---------- Ikon ----------
@@ -592,7 +593,7 @@
           addedAt: base + i,
           local: true,
           remote: false,
-          storagePath: null
+          driveId: null
         };
         await putBlob(id, f);
         if (tags.cover) {
@@ -631,55 +632,64 @@
   }
   $("fileInput").addEventListener("change", (e) => { importFiles(e.target.files); e.target.value = ""; });
 
-  // ---------- Cloud (Supabase) ----------
-  let sb = null;
-  let session = null;
+  // ---------- Cloud (Google Drive) ----------
+  let session = D && D.user ? D.user : null; // pengguna Google yang sedang masuk
   let syncing = false;
-  try {
-    sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey, {
-      auth: { persistSession: true, autoRefreshToken: true, storageKey: "putar-auth" }
-    });
-  } catch (e) {
-    console.warn("Supabase tidak tersedia", e);
+  if (D) D.onChange((u) => { session = u; render(); });
+
+  // Jalankan aksi cloud dari tap pengguna; minta login ulang kalau token habis
+  function cloudAction(fn) {
+    if (!D || !D.configured()) { toast("Login Google belum diaktifkan"); return; }
+    D.withToken().then(fn).catch((e) => toast(e.message || "Gagal masuk Google"));
   }
+  const fileNameFor = (t) => t.fileName || `${(t.artist ? t.artist + " - " : "") + t.title}.${extForMime(t.mime || "audio/mpeg")}`;
 
   async function sync({ quiet = false } = {}) {
-    if (!sb || !session || syncing || !navigator.onLine) return;
+    if (!D || !session || syncing || !navigator.onLine) return;
+    if (!D.hasToken()) { if (!quiet) toast("Tekan SINKRON untuk masuk ulang ke Google"); return; }
     syncing = true;
+    if (!quiet) toast("Menyinkronkan dengan Google Drive…", 0);
     try {
-      const { data, error } = await sb.from(cfg.table).select("*").order("created_at", { ascending: true });
-      if (error) throw error;
-      const remoteIds = new Set();
-      for (const row of data) {
-        remoteIds.add(row.id);
-        let t = byId(row.id);
+      const files = await D.list();
+      const seen = new Set();
+      for (const f of files) {
+        const p = f.appProperties || {};
+        let t = tracks.find((x) => x.driveId === f.id) || (p.sid && byId(p.sid));
         if (!t) {
+          const fromName = titleFromName(f.name || "");
           t = {
-            id: row.id, title: row.title, artist: row.artist || "", album: row.album || "",
-            duration: row.duration || 0, size: row.size_bytes || 0, mime: row.mime || "audio/mpeg",
-            addedAt: Date.parse(row.created_at) || Date.now(), local: false, remote: true, storagePath: row.storage_path
+            id: p.sid || "d_" + f.id,
+            title: p.t || fromName.title || "Tanpa judul",
+            artist: p.a || fromName.artist || "",
+            album: p.al || "",
+            duration: Number(p.d) || 0,
+            size: Number(f.size) || 0,
+            fileName: f.name,
+            mime: f.mimeType || "audio/mpeg",
+            addedAt: Date.parse(f.createdTime) || Date.now(),
+            local: false, remote: true, driveId: f.id
           };
           tracks.push(t);
           await idb.put("tracks", t);
-        } else if (!t.remote || t.storagePath !== row.storage_path) {
+        } else if (!t.remote || t.driveId !== f.id) {
           t.remote = true;
-          t.storagePath = row.storage_path;
+          t.driveId = f.id;
           await idb.put("tracks", t);
         }
+        seen.add(t.id);
       }
       for (const t of tracks.slice()) {
-        if (t.remote && !remoteIds.has(t.id)) {
+        if (t.remote && !seen.has(t.id)) {
           t.remote = false;
-          t.storagePath = null;
-          if (!t.local) { await removeLocalMeta(t); }
+          t.driveId = null;
+          if (!t.local) await removeLocalMeta(t);
           else await idb.put("tracks", t);
         }
       }
-      render();
-      if (!quiet) toast("Sinkronisasi selesai");
+      if (!quiet) toast(`Sinkron selesai: ${files.length} lagu di Drive`);
     } catch (e) {
       console.error(e);
-      if (!quiet) toast("Sinkronisasi gagal: " + (e.message || e));
+      if (!quiet) toast("Sinkron gagal: " + (e.message || e));
     } finally {
       syncing = false;
       render();
@@ -690,25 +700,16 @@
     if (!session || busy.has(t.id)) return false;
     const blob = await getBlob(t.id);
     if (!blob) return false;
-    if (blob.size > 50 * 1024 * 1024) { toast(`${t.title} lebih dari 50 MB, tidak diunggah`); return false; }
     busy.add(t.id); render();
     try {
-      const mime = t.mime || "audio/mpeg";
-      const path = `${session.user.id}/${t.id}.${extForMime(mime)}`;
-      const up = await sb.storage.from(cfg.bucket).upload(path, blob, { contentType: mime, upsert: true });
-      if (up.error) throw up.error;
-      const ins = await sb.from(cfg.table).upsert({
-        id: t.id, title: t.title, artist: t.artist || null, album: t.album || null,
-        duration: t.duration || null, storage_path: path, size_bytes: blob.size, mime
-      });
-      if (ins.error) throw ins.error;
+      t.driveId = await D.upload(t, blob, fileNameFor(t));
       t.remote = true;
-      t.storagePath = path;
       await idb.put("tracks", t);
       return true;
     } catch (e) {
       console.error(e);
       toast(`Gagal mengunggah ${t.title}: ${e.message || e}`);
+      if (/penuh|sesi/i.test(e.message || "")) throw e;
       return false;
     } finally {
       busy.delete(t.id); render();
@@ -716,22 +717,24 @@
   }
   async function uploadPending() {
     const pending = tracks.filter((t) => t.local && !t.remote);
-    for (let i = 0; i < pending.length; i++) {
-      toast(`Mengunggah ke cloud ${i + 1}/${pending.length}…`, 0);
-      await uploadTrack(pending[i]);
-    }
-    if (pending.length) toast("Semua lagu sudah tersimpan di cloud");
+    let ok = 0;
+    try {
+      for (let i = 0; i < pending.length; i++) {
+        toast(`Mengunggah ke Drive ${i + 1}/${pending.length}…`, 0);
+        if (await uploadTrack(pending[i])) ok++;
+      }
+    } catch (e) { return; }
+    if (pending.length) toast(`${ok} lagu tersimpan di Google Drive`);
   }
 
   async function downloadTrack(t) {
     if (t.local || busy.has(t.id)) return;
-    if (!session) { toast("Masuk dulu untuk mengunduh dari cloud"); openAccount(); return; }
+    if (!session) { toast("Masuk Google dulu untuk mengunduh"); openAccount(); return; }
     if (!navigator.onLine) { toast("Tidak ada internet"); return; }
     busy.add(t.id); render();
     try {
-      const { data, error } = await sb.storage.from(cfg.bucket).download(t.storagePath);
-      if (error) throw error;
-      const blob = data.type ? data : new Blob([data], { type: t.mime || "audio/mpeg" });
+      const data = await D.download(t.driveId);
+      const blob = data.type && data.type.startsWith("audio/") ? data : new Blob([data], { type: t.mime || "audio/mpeg" });
       await putBlob(t.id, blob);
       const tags = await window.readID3(blob);
       if (tags.cover) {
@@ -742,7 +745,7 @@
       await idb.put("tracks", t);
     } catch (e) {
       console.error(e);
-      toast(`Gagal mengunduh ${t.title}`);
+      toast(`Gagal mengunduh ${t.title}: ${e.message || e}`);
     } finally {
       busy.delete(t.id); render();
     }
@@ -800,17 +803,12 @@
     toast("Dihapus dari perangkat");
   }
   async function deleteFromCloud(t, alsoLocal) {
-    if (!session) { toast("Masuk dulu"); return; }
+    if (!session) { toast("Masuk Google dulu"); return; }
     busy.add(t.id); render();
     try {
-      if (t.storagePath) {
-        const r = await sb.storage.from(cfg.bucket).remove([t.storagePath]);
-        if (r.error) throw r.error;
-      }
-      const d = await sb.from(cfg.table).delete().eq("id", t.id);
-      if (d.error) throw d.error;
+      if (t.driveId) await D.remove(t.driveId);
       t.remote = false;
-      t.storagePath = null;
+      t.driveId = null;
       if (alsoLocal || !t.local) {
         stopIfCurrent(t);
         await idb.del("blobs", t.id).catch(() => {});
@@ -818,7 +816,7 @@
       } else {
         await idb.put("tracks", t);
       }
-      toast(alsoLocal ? "Dihapus dari semua tempat" : "Dihapus dari cloud");
+      toast(alsoLocal ? "Dihapus dari semua tempat" : "Dihapus dari Google Drive");
     } catch (e) {
       console.error(e);
       toast("Gagal menghapus: " + (e.message || e));
@@ -858,32 +856,23 @@
     toast(keep.length ? `Perangkat kosong. ${keep.length} lagu masih ada di cloud` : "Semua lagu di perangkat sudah dihapus");
   }
   async function clearCloud() {
-    if (!session) { toast("Masuk dulu"); return; }
-    toast("Menghapus semua lagu di cloud…", 0);
+    if (!session) { toast("Masuk Google dulu"); return; }
+    toast("Menghapus folder Saku di Google Drive…", 0);
     try {
-      const { data, error } = await sb.from(cfg.table).select("id, storage_path");
-      if (error) throw error;
-      const paths = data.map((r) => r.storage_path).filter(Boolean);
-      for (let i = 0; i < paths.length; i += 100) {
-        const r = await sb.storage.from(cfg.bucket).remove(paths.slice(i, i + 100));
-        if (r.error) throw r.error;
-      }
-      const ids = data.map((r) => r.id);
-      for (let i = 0; i < ids.length; i += 200) {
-        const d = await sb.from(cfg.table).delete().in("id", ids.slice(i, i + 200));
-        if (d.error) throw d.error;
-      }
+      await D.removeAll();
+      let n = 0;
       for (const t of tracks.slice()) {
         if (!t.remote) continue;
-        t.remote = false; t.storagePath = null;
+        n++;
+        t.remote = false; t.driveId = null;
         if (!t.local) { if (current && current.id === t.id) resetPlayer(); await removeLocalMeta(t); }
         else await idb.put("tracks", t);
       }
       render();
-      toast(`${data.length} lagu dihapus dari cloud`);
+      toast(`${n} lagu dihapus dari Google Drive`);
     } catch (e) {
       console.error(e);
-      toast("Gagal menghapus cloud: " + (e.message || e));
+      toast("Gagal menghapus: " + (e.message || e));
       render();
     }
   }
@@ -905,9 +894,9 @@
     const items = [];
     if (current) items.push(`<li><button data-m="track">Opsi lagu ini</button></li>`);
     items.push(`<li><button data-m="add">Tambah / cek lagu yang belum masuk</button></li>`);
-    items.push(`<li><button data-m="cloud">Cloud & akun</button></li>`);
+    items.push(`<li><button data-m="cloud">Google Drive & akun</button></li>`);
     if (localN) items.push(`<li><button data-m="clearlocal" class="danger">Kosongkan perangkat (${localN} lagu)</button></li>`);
-    if (session && remoteN) items.push(`<li><button data-m="clearcloud" class="danger">Hapus semua di cloud (${remoteN} lagu)</button></li>`);
+    if (session && remoteN) items.push(`<li><button data-m="clearcloud" class="danger">Hapus semua di Google Drive (${remoteN} lagu)</button></li>`);
     openSheet(`<h3>Menu</h3><ul class="menu">${items.join("")}</ul>`);
     $("sheetBody").onclick = (e) => {
       const b = e.target.closest("button[data-m]");
@@ -919,7 +908,7 @@
       else if (m === "clearlocal") confirmBig("Kosongkan perangkat?", remoteN
           ? `Semua file lagu di perangkat ini akan dihapus. Lagu yang sudah ada di cloud tetap aman dan bisa diunduh lagi. Lagu yang belum diunggah akan hilang.`
           : `Semua ${localN} lagu di perangkat ini akan dihapus permanen.`, "Kosongkan", clearDevice);
-      else if (m === "clearcloud") confirmBig("Hapus semua di cloud?", `Semua ${remoteN} lagu di cloud akan dihapus permanen. Lagu yang sudah ada di perangkat ini tetap bisa diputar.`, "Hapus semua", clearCloud);
+      else if (m === "clearcloud") confirmBig("Hapus semua di Google Drive?", `Folder "Saku" beserta ${remoteN} lagu di Google Drive kamu akan dihapus permanen. Lagu yang sudah ada di perangkat ini tetap bisa diputar.`, "Hapus semua", () => cloudAction(clearCloud));
     };
   }
 
@@ -937,7 +926,7 @@
   $("sheetBackdrop").addEventListener("click", closeSheet);
 
   function trackHeader(t) {
-    return `<div class="sheet-track"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || "Artis tidak diketahui")}${t.size ? " · " + bytes(t.size) : ""}${t.remote ? " · CLOUD" : ""}</div></div>`;
+    return `<div class="sheet-track"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || "Artis tidak diketahui")}${t.size ? " · " + bytes(t.size) : ""}${t.remote ? " · DRIVE" : ""}</div></div>`;
   }
   function openTrackMenu(id) {
     const t = byId(id);
@@ -946,8 +935,8 @@
     if (t.local) items.push(`<li><button data-act="playnext">Putar berikutnya</button></li>`);
     items.push(`<li><button data-act="rename">Ubah judul & artis</button></li>`);
     if (!t.local && t.remote) items.push(`<li><button data-act="download">Unduh untuk offline</button></li>`);
-    if (t.local && !t.remote && session) items.push(`<li><button data-act="upload">Simpan ke cloud</button></li>`);
-    if (t.local) items.push(`<li><button data-act="dellocal" class="${t.remote ? "" : "danger"}">${t.remote ? "Hapus dari perangkat (tetap di cloud)" : "Hapus lagu"}</button></li>`);
+    if (t.local && !t.remote && session) items.push(`<li><button data-act="upload">Simpan ke Google Drive</button></li>`);
+    if (t.local) items.push(`<li><button data-act="dellocal" class="${t.remote ? "" : "danger"}">${t.remote ? "Hapus dari perangkat (tetap di Drive)" : "Hapus lagu"}</button></li>`);
     if (t.remote) items.push(`<li><button data-act="delall" class="danger">Hapus dari semua tempat</button></li>`);
     openSheet(`${trackHeader(t)}<ul class="menu">${items.join("")}</ul>`);
     $("sheetBody").onclick = async (e) => {
@@ -966,13 +955,13 @@
       } else if (act === "rename") {
         openRename(t);
       } else if (act === "download") {
-        closeSheet(); downloadTrack(t);
+        closeSheet(); cloudAction(() => downloadTrack(t));
       } else if (act === "upload") {
-        closeSheet(); uploadTrack(t).then((ok) => ok && toast("Tersimpan di cloud"));
+        closeSheet(); cloudAction(() => uploadTrack(t).then((ok) => ok && toast("Tersimpan di Google Drive")).catch(() => {}));
       } else if (act === "dellocal") {
-        confirmSheet(t, t.remote ? "Hapus file dari iPhone ini? Lagu masih bisa diunduh lagi dari cloud." : "Hapus lagu ini dari perangkat? Lagu belum tersimpan di cloud, jadi akan hilang permanen.", () => deleteFromDevice(t));
+        confirmSheet(t, t.remote ? "Hapus file dari perangkat ini? Lagu masih bisa diunduh lagi dari Google Drive." : "Hapus lagu ini dari perangkat? Lagu belum tersimpan di Google Drive, jadi akan hilang permanen.", () => deleteFromDevice(t));
       } else if (act === "delall") {
-        confirmSheet(t, "Hapus lagu ini dari cloud dan dari perangkat ini?", () => deleteFromCloud(t, true));
+        confirmSheet(t, "Hapus lagu ini dari Google Drive dan dari perangkat ini?", () => cloudAction(() => deleteFromCloud(t, true)));
       }
     };
   }
@@ -1001,7 +990,7 @@
       t.title = String(fd.get("title")).trim() || t.title;
       t.artist = String(fd.get("artist")).trim();
       await idb.put("tracks", t);
-      if (t.remote && session) sb.from(cfg.table).update({ title: t.title, artist: t.artist || null }).eq("id", t.id).then(() => {});
+      if (t.remote && t.driveId && session && D.hasToken()) D.updateMeta(t.driveId, t).catch(() => {});
       closeSheet();
       if (current && current.id === t.id) { showNowPlaying(); updateMediaSession(); }
       render();
@@ -1016,58 +1005,53 @@
       if (est && est.quota) storageLine = `<div class="stat">Penyimpanan perangkat: <b>${bytes(est.usage || 0)}</b> terpakai dari ${bytes(est.quota)}</div>`;
     } catch (e) {}
     const localN = tracks.filter((t) => t.local).length;
-    if (!session) {
-      openSheet(`<h3>Simpan ke cloud</h3>
-        <p class="sub">Tanpa login, lagu tetap tersimpan offline di perangkat ini. Login (pakai akun Lajur) supaya lagu bisa dicadangkan ke cloud dan diunduh lagi di perangkat lain. Unggahan tidak otomatis: pilih sendiri lewat tombol UNGGAH setelah login. Kuota cloud gratis 1 GB.</p>
-        <form id="loginForm">
-          <label class="field"><span>Email</span><input type="email" name="email" autocomplete="email" required></label>
-          <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
-          <div class="err" id="loginErr"></div>
-          <button class="btn solid" style="width:100%" id="loginBtn">Masuk</button>
-        </form>
-        <div style="margin-top:14px">${storageLine}<div class="stat">Di perangkat: <b>${localN} lagu</b></div></div>
-        ${tip}`);
+    if (!D || !D.configured()) {
+      openSheet(`<h3>Google Drive</h3><p class="sub">Login Google belum diaktifkan oleh pemilik app. Lagu tetap tersimpan offline di perangkat ini.</p>${storageLine}<div class="stat">Di perangkat: <b>${localN} lagu</b></div>${tip}`);
       $("sheetBody").onclick = null;
-      $("loginForm").onsubmit = async (e) => {
-        e.preventDefault();
-        if (!sb) { $("loginErr").textContent = "Layanan cloud tidak tersedia"; return; }
-        const fd = new FormData(e.target);
-        $("loginBtn").disabled = true;
-        $("loginErr").textContent = "";
-        const { error } = await sb.auth.signInWithPassword({ email: String(fd.get("email")).trim(), password: String(fd.get("password")) });
-        $("loginBtn").disabled = false;
-        if (error) { $("loginErr").textContent = error.message === "Invalid login credentials" ? "Email atau password salah" : error.message; return; }
-        closeSheet();
-        toast("Berhasil masuk");
-        setTimeout(() => sync(), 300);
+      return;
+    }
+    if (!session) {
+      openSheet(`<h3>Google Drive</h3>
+        <p class="sub">Masuk dengan akun Google untuk mencadangkan lagu ke folder <b>"Saku"</b> di Google Drive kamu sendiri, lalu unduh lagi di perangkat lain. Saku hanya bisa melihat file yang dibuatnya sendiri. File lain di Drive kamu tidak tersentuh.</p>
+        <button class="btn solid gbtn" style="width:100%" data-a="login"><span class="g">G</span> Masuk dengan Google</button>
+        <div class="err" id="loginErr"></div>
+        ${storageLine}<div class="stat">Di perangkat: <b>${localN} lagu</b></div>
+        ${tip}`);
+      $("sheetBody").onclick = (e) => {
+        const b = e.target.closest("button[data-a=login]");
+        if (!b) return;
+        D.requestToken(true).then(() => {
+          closeSheet();
+          toast(`Masuk sebagai ${session ? session.email : "akun Google"}`);
+          sync();
+        }).catch((err) => { const el = $("loginErr"); if (el) el.textContent = err.message; });
       };
       return;
     }
     const remoteN = tracks.filter((t) => t.remote).length;
     const notDl = tracks.filter((t) => t.remote && !t.local).length;
     const notUp = tracks.filter((t) => t.local && !t.remote).length;
-    openSheet(`<h3>Cloud</h3>
-      <p class="sub">Masuk sebagai ${esc(session.user.email)}</p>
-      <div class="stat">Di cloud: <b>${remoteN} lagu</b> · Di perangkat: <b>${localN} lagu</b>${notDl ? `<br>${notDl} lagu belum diunduh` : ""}${notUp ? `<br>${notUp} lagu belum diunggah` : ""}</div>
+    openSheet(`<h3>Google Drive</h3>
+      <p class="sub">Masuk sebagai ${esc(session.email)}</p>
+      <div class="stat">Di Drive: <b>${remoteN} lagu</b> · Di perangkat: <b>${localN} lagu</b>${notDl ? `<br>${notDl} lagu belum diunduh` : ""}${notUp ? `<br>${notUp} lagu belum diunggah` : ""}</div>
       ${storageLine}
       <div class="row" style="margin-bottom:10px">
         <button class="btn solid" data-a="sync">Sinkron</button>
         ${notUp ? `<button class="btn" data-a="up">Unggah ${notUp}</button>` : ""}
-        ${notDl ? `<button class="btn" data-a="dl">Unduh semua</button>` : ""}
+        ${notDl ? `<button class="btn" data-a="dl">Unduh ${notDl}</button>` : ""}
       </div>
       <button class="btn" style="width:100%" data-a="logout">Keluar</button>
+      <p class="tip">Lagu tersimpan di folder "Saku" di Google Drive kamu dan memakai kuota Drive (gratis 15 GB).</p>
       ${tip}`);
-    $("sheetBody").onclick = async (e) => {
+    $("sheetBody").onclick = (e) => {
       const b = e.target.closest("button[data-a]");
       if (!b) return;
+      const a = b.dataset.a;
       closeSheet();
-      if (b.dataset.a === "sync") sync();
-      else if (b.dataset.a === "dl") downloadAll();
-      else if (b.dataset.a === "up") uploadPending();
-      else if (b.dataset.a === "logout") {
-        await sb.auth.signOut();
-        toast("Keluar. Lagu di perangkat tetap ada.");
-      }
+      if (a === "sync") cloudAction(() => sync());
+      else if (a === "dl") cloudAction(() => downloadAll());
+      else if (a === "up") cloudAction(() => uploadPending());
+      else if (a === "logout") { D.signOut(); toast("Keluar. Lagu di perangkat tetap ada."); }
     };
   }
 
@@ -1098,7 +1082,7 @@
     buildQueue(start, list);
     loadTrack(start, true);
   });
-  $("btnDownloadAll").addEventListener("click", downloadAll);
+  $("btnDownloadAll").addEventListener("click", () => cloudAction(() => downloadAll()));
   $("btnAccount").addEventListener("click", openAccount);
   $("btnView").addEventListener("click", () => {
     if (view === "now") return setView("lib");
@@ -1142,6 +1126,14 @@
     setView("lib");
     try {
       tracks = (await idb.all("tracks")) || [];
+      // Migrasi dari cloud lama (Supabase): tanda cloud lama tidak berlaku lagi
+      for (const t of tracks.slice()) {
+        if (t.remote && !t.driveId) {
+          t.remote = false; t.storagePath = null;
+          if (!t.local) { await idb.del("tracks", t.id); tracks = tracks.filter((x) => x !== t); }
+          else await idb.put("tracks", t);
+        }
+      }
       const covers = await idb.entries("covers");
       for (const [k, v] of covers) if (v instanceof Blob) coverUrls.set(k, URL.createObjectURL(v));
     } catch (e) {
@@ -1158,19 +1150,7 @@
       $("tCur").textContent = fmt(prefs.lastPos || 0);
     }
 
-    if (sb) {
-      const { data } = await sb.auth.getSession();
-      session = data.session;
-      render();
-      if (session) sync({ quiet: true });
-      sb.auth.onAuthStateChange((ev, s) => {
-        session = s;
-        setTimeout(() => {
-          render();
-          if (ev === "SIGNED_IN") sync({ quiet: true });
-        }, 0);
-      });
-    }
+    if (session && D.hasToken()) sync({ quiet: true });
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});

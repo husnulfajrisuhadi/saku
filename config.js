@@ -1,7 +1,7 @@
-// Kunci publik Supabase (aman dipakai di browser; data dilindungi Row Level Security).
-window.PUTAR_CONFIG = {
-  supabaseUrl: "https://nvogkqrovsotzxbigizr.supabase.co",
-  supabaseKey: "sb_publishable_SLrXb_-pAFgFhM5TRCFwLQ_xL-EuIu1",
-  bucket: "putar",
-  table: "putar_tracks"
+// Pengaturan Saku.
+// googleClientId: OAuth Client ID (tipe "Web application") dari Google Cloud Console.
+// Kosongkan untuk mematikan fitur Google Drive; app tetap jalan offline.
+window.SAKU_CONFIG = {
+  googleClientId: "",
+  driveFolderName: "Saku"
 };

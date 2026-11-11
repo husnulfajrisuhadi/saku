@@ -1,5 +1,5 @@
 // Cache tampilan aplikasi supaya Saku tetap terbuka tanpa internet.
-const CACHE = "saku-v3";
+const CACHE = "saku-v4";
 const SHELL = [
   "/",
   "/index.html",
@@ -7,20 +7,17 @@ const SHELL = [
   "/app.js",
   "/id3.js",
   "/config.js",
-  // pustaka Supabase dari CDN di-cache terpisah (lihat LIB)
+  "/drive.js",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/apple-touch-icon.png"
 ];
 
-const LIB = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js";
-
 self.addEventListener("install", (e) => {
   e.waitUntil(
     caches.open(CACHE).then(async (c) => {
       await c.addAll(SHELL);
-      try { await c.add(new Request(LIB, { mode: "no-cors" })); } catch (err) {}
     }).then(() => self.skipWaiting())
   );
 });
@@ -37,8 +34,8 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (req.url === LIB || url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
-    // Pustaka & font: versi tetap, jadi cukup cache-first
+  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
+    // Font: versi tetap, jadi cukup cache-first
     e.respondWith(
       caches.match(req, { ignoreVary: true }).then((cached) => cached || fetch(req).then((res) => {
         const copy = res.clone();
@@ -48,7 +45,7 @@ self.addEventListener("fetch", (e) => {
     );
     return;
   }
-  if (url.origin !== self.location.origin) return; // API Supabase langsung ke jaringan
+  if (url.origin !== self.location.origin) return; // Google login & Drive API langsung ke jaringan
 
   if (req.mode === "navigate") {
     e.respondWith(

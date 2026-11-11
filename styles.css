@@ -358,3 +358,6 @@ svg.kicon { width: 14px; height: 11px; fill: currentColor; }
 .report li { padding: 6px 2px; border-bottom: 1px dashed var(--ink-soft); }
 .report .rn { display: block; font-size: 19px; word-break: break-all; }
 .report .rw { display: block; font-size: 16px; color: var(--ink-soft); margin-top: 2px; }
+
+.gbtn { gap: 10px; }
+.gbtn .g { display: inline-grid; place-items: center; width: 24px; height: 24px; background: var(--lcd); color: var(--ink); font-size: 20px; }
