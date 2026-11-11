@@ -246,6 +246,7 @@
 
   window.SakuDrive = {
     configured, hasToken, withToken, requestToken, signOut,
+    token: () => (hasToken() ? token : null),
     get user() { return user; },
     onChange: (fn) => listeners.add(fn),
     list, upload, download, remove, removeAll, updateMeta,

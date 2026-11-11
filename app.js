@@ -136,7 +136,10 @@
   let seeking = false;
 
   const byId = (id) => tracks.find((t) => t.id === id);
-  const playable = (t) => t && t.local;
+  // Bisa diputar: tersimpan di perangkat, atau ada di Drive (diputar streaming saat online & login)
+  const playable = (t) => t && (t.local || (t.remote && t.driveId && session));
+  const canStream = () => !!(D && session && D.hasToken() && navigator.onLine && navigator.serviceWorker && navigator.serviceWorker.controller);
+  let streaming = false;
 
   function sortedTracks() {
     const list = tracks.slice();
@@ -183,7 +186,7 @@
 
     const remoteOnly = tracks.filter((t) => !t.local && t.remote).length;
     $("cloudBanner").hidden = remoteOnly === 0;
-    $("cloudBannerTitle").textContent = `${remoteOnly} LAGU BELUM DIUNDUH`;
+    $("cloudBannerTitle").textContent = `${remoteOnly} LAGU DI DRIVE (STREAMING)`;
 
     const playingId = current?.id;
     $("trackList").innerHTML = list.map((t, i) => {
@@ -319,12 +322,28 @@
   async function loadTrack(id, autoplay = true, startAt = 0) {
     const t = byId(id);
     if (!t) return;
-    if (!t.local) {
+    let url;
+    if (t.local) {
+      url = await blobUrlFor(id);
+      if (!url) { toast("File lagu tidak ditemukan di perangkat"); return; }
+      streaming = false;
+    } else if (canStream()) {
+      // Streaming langsung dari Google Drive lewat service worker (mendukung lompat posisi)
+      url = `/__drive/${encodeURIComponent(t.driveId)}?t=${encodeURIComponent(D.token())}`;
+      streaming = true;
+    } else if (!navigator.onLine) {
+      toast("Lagu ini belum diunduh dan tidak ada internet");
+      return;
+    } else if (session && !D.hasToken()) {
+      audio.pause();
+      toast("Sesi Google habis. Tekan lagunya lagi untuk masuk ulang");
+      return;
+    } else {
       await downloadTrack(t);
       if (!t.local) return;
+      url = await blobUrlFor(id);
+      streaming = false;
     }
-    const url = await blobUrlFor(id);
-    if (!url) { toast("File lagu tidak ditemukan di perangkat"); return; }
     const old = currentUrl;
     current = t;
     currentUrl = url;
@@ -336,7 +355,7 @@
     if (autoplay) {
       try { await audio.play(); } catch (e) { if (e.name !== "AbortError") console.warn(e); }
     }
-    if (old) setTimeout(() => URL.revokeObjectURL(old), 4000);
+    if (old && old.startsWith("blob:")) setTimeout(() => URL.revokeObjectURL(old), 4000);
     prefs.lastId = id;
     prefs.lastPos = startAt;
     savePrefs();
@@ -367,7 +386,7 @@
     const pos = queue.indexOf(t.id) + 1;
     const pad = (n) => String(n).padStart(3, "0");
     $("nowIndex").textContent = `${pad(pos || 1)}/${pad(queue.length || 1)}`;
-    $("nowFmt").textContent = `${extForMime(t.mime || "audio/mpeg").toUpperCase()} ${t.size ? "· " + bytes(t.size) : ""}`;
+    $("nowFmt").textContent = `${extForMime(t.mime || "audio/mpeg").toUpperCase()} ${t.size ? "· " + bytes(t.size) : ""}${t.local ? "" : " · STREAM"}`;
     const u = coverUrls.get(t.id);
     cover.style.backgroundImage = u ? `url('${u}')` : "";
     cover.classList.toggle("has-art", !!u);
@@ -380,10 +399,9 @@
     const t = byId(id);
     if (!t) return;
     buildQueue(id, visibleTracks());
-    if (!t.local) {
-      return downloadTrack(t).then(() => {
-        if (t.local) { buildQueue(id, visibleTracks()); return loadTrack(id, true); }
-      });
+    if (!t.local && session && !D.hasToken()) {
+      // Dipanggil dari ketukan, jadi boleh membuka jendela login Google
+      return D.withToken().then(() => loadTrack(id, true)).catch((e) => toast(e.message || "Gagal masuk Google"));
     }
     return loadTrack(id, true);
   }
@@ -394,8 +412,14 @@
       if (first) playFromList(first.id);
       return;
     }
-    if (audio.paused) audio.play().catch(() => {});
-    else audio.pause();
+    if (audio.paused) {
+      if (streaming && !D.hasToken()) {
+        const pos = audio.currentTime || 0;
+        D.withToken().then(() => loadTrack(current.id, true, pos)).catch((e) => toast(e.message || "Gagal masuk Google"));
+        return;
+      }
+      audio.play().catch(() => {});
+    } else audio.pause();
   }
 
   function next(auto = false) {
@@ -482,6 +506,10 @@
   audio.addEventListener("ended", () => next(true));
   audio.addEventListener("error", () => {
     if (!current || !audio.src) return;
+    if (streaming && (!D.hasToken() || !navigator.onLine)) {
+      toast(!navigator.onLine ? "Streaming terputus: tidak ada internet" : "Sesi Google habis. Tekan play untuk masuk ulang");
+      return;
+    }
     toast("Lagu ini tidak bisa diputar, lanjut ke berikutnya");
     setTimeout(() => next(true), 600);
   });
@@ -802,8 +830,7 @@
       added++;
     }
     render();
-    toast(`${added} lagu dipilih${dupes ? `, ${dupes} sudah ada` : ""}. Mengunduh…`);
-    await downloadAll();
+    toast(`${added} lagu ditambahkan${dupes ? `, ${dupes} sudah ada` : ""}. Ketuk untuk putar langsung`, 4000);
   }
 
   // ---------- Hapus ----------

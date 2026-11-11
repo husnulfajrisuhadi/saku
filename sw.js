@@ -1,5 +1,5 @@
 // Cache tampilan aplikasi supaya Saku tetap terbuka tanpa internet.
-const CACHE = "saku-v4";
+const CACHE = "saku-v5";
 const SHELL = [
   "/",
   "/index.html",
@@ -34,6 +34,17 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
+
+  // Streaming lagu dari Google Drive: tambahkan token login ke request supaya <audio> bisa memutar langsung
+  if (url.origin === self.location.origin && url.pathname.startsWith("/__drive/")) {
+    const id = decodeURIComponent(url.pathname.slice(9));
+    const headers = { Authorization: "Bearer " + (url.searchParams.get("t") || "") };
+    const range = req.headers.get("range");
+    if (range) headers.Range = range;
+    e.respondWith(fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers }));
+    return;
+  }
+
   if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
     // Font: versi tetap, jadi cukup cache-first
     e.respondWith(
