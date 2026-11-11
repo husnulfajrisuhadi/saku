@@ -138,13 +138,12 @@
     return { sid: t.id, t: clip(t.title), a: clip(t.artist), al: clip(t.album), d: String(Math.round(t.duration || 0)) };
   }
 
+  // Semua file audio yang boleh diakses Saku: yang dibuat Saku dan yang dipilih lewat "Ambil dari Drive"
   async function list() {
-    const fid = await folderId(false);
-    if (!fid) return [];
     const out = [];
     let pageToken = "";
     do {
-      const q = encodeURIComponent(`'${fid}' in parents and trashed=false`);
+      const q = encodeURIComponent(`trashed=false and mimeType contains 'audio/'`);
       const r = await api(`${API}/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,size,mimeType,createdTime,appProperties)${pageToken ? "&pageToken=" + pageToken : ""}`);
       const j = await r.json();
       out.push(...(j.files || []));
@@ -193,11 +192,65 @@
     try { localStorage.removeItem(folderKey()); } catch (e) {}
   }
 
+
+  // ---------- Google Picker: pilih lagu yang sudah ada di Drive ----------
+  let pickerReady = null;
+  function loadPicker() {
+    if (window.google && google.picker) return Promise.resolve();
+    return (pickerReady ||= new Promise((resolve, reject) => {
+      const done = () => gapi.load("picker", { callback: resolve, onerror: () => reject(new Error("Gagal memuat pemilih file Google")) });
+      if (window.gapi) return done();
+      const s = document.createElement("script");
+      s.src = "https://apis.google.com/js/api.js";
+      s.onload = done;
+      s.onerror = () => { pickerReady = null; reject(new Error("Gagal memuat pemilih file Google. Cek internet")); };
+      document.head.appendChild(s);
+    }));
+  }
+  const AUDIO_MIMES = "audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/flac,audio/x-flac,audio/ogg,audio/aiff,audio/x-aiff,audio/webm";
+
+  async function pick() {
+    if (!cfg.googleApiKey) throw new Error("Pemilih Drive belum diaktifkan");
+    const tk = await withToken();
+    const [, fid] = await Promise.all([loadPicker(), folderId(true).catch(() => null)]);
+    return new Promise((resolve) => {
+      const P = google.picker;
+      const inSaku = new P.DocsView(P.ViewId.DOCS).setMimeTypes(AUDIO_MIMES).setMode(P.DocsViewMode.LIST);
+      if (fid) inSaku.setParent(fid);
+      inSaku.setLabel ? inSaku.setLabel("Folder Saku") : null;
+      const all = new P.DocsView(P.ViewId.DOCS).setMimeTypes(AUDIO_MIMES).setMode(P.DocsViewMode.LIST).setIncludeFolders(true);
+      all.setLabel ? all.setLabel("Semua Drive") : null;
+      const picker = new P.PickerBuilder()
+        .addView(inSaku)
+        .addView(all)
+        .enableFeature(P.Feature.MULTISELECT_ENABLED)
+        .setMaxItems(500)
+        .setOAuthToken(tk)
+        .setDeveloperKey(cfg.googleApiKey)
+        .setAppId(cfg.googleAppId)
+        .setOrigin(location.protocol + "//" + location.host)
+        .setTitle("Pilih lagu untuk Saku")
+        .setCallback((data) => {
+          if (data.action === P.Action.PICKED) resolve((data.docs || []).map((x) => ({ id: x.id, name: x.name, mimeType: x.mimeType, size: x.sizeBytes })));
+          else if (data.action === P.Action.CANCEL) resolve([]);
+        })
+        .build();
+      picker.setVisible(true);
+    });
+  }
+
+  async function fileInfo(id) {
+    const r = await api(`${API}/files/${id}?fields=id,name,size,mimeType,createdTime,appProperties`);
+    return r.json();
+  }
+
   window.SakuDrive = {
     configured, hasToken, withToken, requestToken, signOut,
     get user() { return user; },
     onChange: (fn) => listeners.add(fn),
     list, upload, download, remove, removeAll, updateMeta,
-    ensureFolder: () => folderId(true)
+    ensureFolder: () => folderId(true),
+    pick, fileInfo,
+    pickerEnabled: () => configured() && !!cfg.googleApiKey
   };
 })();

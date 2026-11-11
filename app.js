@@ -554,7 +554,7 @@
     });
   }
   function titleFromName(name) {
-    const base = name.replace(/\.[^.]+$/, "").replace(/_/g, " ").trim();
+    const base = name.replace(/\.[^.]+$/, "").replace(/_/g, " ").trim().replace(/^\d{1,4}\s*[-.)]\s*/, "");
     const m = base.match(/^(.+?)\s+-\s+(.+)$/);
     return m ? { artist: m[1].trim(), title: m[2].trim() } : { artist: "", title: base };
   }
@@ -667,7 +667,8 @@
             fileName: f.name,
             mime: f.mimeType || "audio/mpeg",
             addedAt: Date.parse(f.createdTime) || Date.now(),
-            local: false, remote: true, driveId: f.id
+            local: false, remote: true, driveId: f.id,
+            fromPicker: !p.t
           };
           tracks.push(t);
           await idb.put("tracks", t);
@@ -741,6 +742,13 @@
         await idb.put("covers", tags.cover, t.id);
         coverUrls.set(t.id, URL.createObjectURL(tags.cover));
       }
+      if (t.fromPicker) {
+        if (tags.title) t.title = tags.title;
+        if (tags.artist) t.artist = tags.artist;
+        if (tags.album) t.album = tags.album;
+        delete t.fromPicker;
+      }
+      if (!t.duration) t.duration = await durationOf(blob);
       t.local = true;
       await idb.put("tracks", t);
     } catch (e) {
@@ -760,6 +768,42 @@
     }
     toast("Semua lagu siap diputar offline");
     if (current) baseQueue = sortedTracks().filter(playable).map((t) => t.id);
+  }
+
+  // Ambil lagu yang sudah ada di Google Drive (lewat pemilih file Google)
+  async function importFromDrive() {
+    let docs;
+    try {
+      docs = await D.pick();
+    } catch (e) {
+      toast(e.message || "Gagal membuka Google Drive");
+      return;
+    }
+    if (!docs.length) return;
+    let added = 0, dupes = 0;
+    for (const doc of docs) {
+      if (tracks.find((t) => t.driveId === doc.id)) { dupes++; continue; }
+      const fromName = titleFromName(doc.name || "");
+      const t = {
+        id: "d_" + doc.id,
+        title: fromName.title || "Tanpa judul",
+        artist: fromName.artist || "",
+        album: "",
+        duration: 0,
+        size: Number(doc.size) || 0,
+        fileName: doc.name,
+        mime: doc.mimeType || "audio/mpeg",
+        addedAt: Date.now() + added,
+        local: false, remote: true, driveId: doc.id,
+        fromPicker: true
+      };
+      tracks.push(t);
+      await idb.put("tracks", t);
+      added++;
+    }
+    render();
+    toast(`${added} lagu dipilih${dupes ? `, ${dupes} sudah ada` : ""}. Mengunduh…`);
+    await downloadAll();
   }
 
   // ---------- Hapus ----------
@@ -893,7 +937,8 @@
     const remoteN = tracks.filter((t) => t.remote).length;
     const items = [];
     if (current) items.push(`<li><button data-m="track">Opsi lagu ini</button></li>`);
-    items.push(`<li><button data-m="add">Tambah / cek lagu yang belum masuk</button></li>`);
+    items.push(`<li><button data-m="add">Tambah dari perangkat / cek lagu yang belum masuk</button></li>`);
+    if (session && D.pickerEnabled()) items.push(`<li><button data-m="pick">Ambil lagu dari Google Drive</button></li>`);
     items.push(`<li><button data-m="cloud">Google Drive & akun</button></li>`);
     if (localN) items.push(`<li><button data-m="clearlocal" class="danger">Kosongkan perangkat (${localN} lagu)</button></li>`);
     if (session && remoteN) items.push(`<li><button data-m="clearcloud" class="danger">Hapus semua di Google Drive (${remoteN} lagu)</button></li>`);
@@ -904,6 +949,7 @@
       const m = b.dataset.m;
       if (m === "track") openTrackMenu(current.id);
       else if (m === "add") { closeSheet(); $("fileInput").click(); }
+      else if (m === "pick") { closeSheet(); importFromDrive(); }
       else if (m === "cloud") openAccount();
       else if (m === "clearlocal") confirmBig("Kosongkan perangkat?", remoteN
           ? `Semua file lagu di perangkat ini akan dihapus. Lagu yang sudah ada di cloud tetap aman dan bisa diunduh lagi. Lagu yang belum diunggah akan hilang.`
@@ -1040,8 +1086,9 @@
         ${notUp ? `<button class="btn" data-a="up">Unggah ${notUp}</button>` : ""}
         ${notDl ? `<button class="btn" data-a="dl">Unduh ${notDl}</button>` : ""}
       </div>
+      ${D.pickerEnabled() ? `<button class="btn solid" style="width:100%;margin-bottom:10px" data-a="pick">+ Ambil lagu dari Drive</button>` : ""}
       <button class="btn" style="width:100%" data-a="logout">Keluar</button>
-      <p class="tip">Lagu tersimpan di folder "Saku" di Google Drive kamu dan memakai kuota Drive (gratis 15 GB).</p>
+      <p class="tip">Taruh MP3 di folder "Saku" di Google Drive (misalnya dari laptop), lalu tekan AMBIL LAGU DARI DRIVE dan pilih semua. Lagu yang diunggah dari Saku tersimpan di folder yang sama.</p>
       ${tip}`);
     $("sheetBody").onclick = (e) => {
       const b = e.target.closest("button[data-a]");
@@ -1051,6 +1098,7 @@
       if (a === "sync") cloudAction(() => D.ensureFolder().catch(() => {}).then(() => sync()));
       else if (a === "dl") cloudAction(() => downloadAll());
       else if (a === "up") cloudAction(() => uploadPending());
+      else if (a === "pick") importFromDrive();
       else if (a === "logout") { D.signOut(); toast("Keluar. Lagu di perangkat tetap ada."); }
     };
   }
@@ -1083,6 +1131,11 @@
     loadTrack(start, true);
   });
   $("btnDownloadAll").addEventListener("click", () => cloudAction(() => downloadAll()));
+  $("btnEmptyDrive").addEventListener("click", () => {
+    if (!D || !D.pickerEnabled()) { toast("Fitur Google Drive belum aktif"); return; }
+    if (!session) { openAccount(); return; }
+    importFromDrive();
+  });
   $("btnAccount").addEventListener("click", openAccount);
   $("btnView").addEventListener("click", () => {
     if (view === "now") return setView("lib");
