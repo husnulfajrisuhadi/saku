@@ -161,8 +161,6 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .track:active { background: var(--ink-ghost); }
 .track.playing { background: var(--ink); color: var(--lcd); }
 .track.playing .no, .track.playing .a { color: rgba(166,189,128,.75); }
-.track.remote .t::before { content: "[DRIVE] "; color: var(--ink-soft); }
-.track.playing.remote .t::before { color: inherit; }
 .track.busy .d { animation: blink .6s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
