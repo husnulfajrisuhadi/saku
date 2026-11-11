@@ -642,6 +642,10 @@
     render();
     if (current) { baseQueue = sortedTracks().filter(playable).map((t) => t.id); }
     showImportReport(report);
+    if (session && report.added.length) {
+      if (D.hasToken()) uploadPending();
+      else toast("Tekan CLOUD → SINKRON untuk menyimpan lagu baru ke Google Drive", 4000);
+    }
   }
 
   function showImportReport(r) {
@@ -715,7 +719,11 @@
           else await idb.put("tracks", t);
         }
       }
-      if (!quiet) toast(`Sinkron selesai: ${files.length} lagu di Drive`);
+      const pending = tracks.filter((t) => t.local && !t.remote);
+      syncing = false;
+      render();
+      if (pending.length) await uploadPending();
+      if (!quiet) toast(`Sinkron selesai: ${tracks.filter((t) => t.remote).length} lagu di Google Drive`);
     } catch (e) {
       console.error(e);
       if (!quiet) toast("Sinkron gagal: " + (e.message || e));
@@ -963,10 +971,9 @@
     const localN = tracks.filter((t) => t.local).length;
     const remoteN = tracks.filter((t) => t.remote).length;
     const items = [];
-    if (current) items.push(`<li><button data-m="track">Opsi lagu ini</button></li>`);
-    items.push(`<li><button data-m="add">Tambah dari perangkat / cek lagu yang belum masuk</button></li>`);
-    if (session && D.pickerEnabled()) items.push(`<li><button data-m="pick">Ambil lagu dari Google Drive</button></li>`);
-    items.push(`<li><button data-m="cloud">Google Drive & akun</button></li>`);
+    items.push(`<li><button data-m="add">Upload musik dari perangkat</button></li>`);
+    if (D && D.pickerEnabled()) items.push(`<li><button data-m="pick">Upload musik dari Google Drive</button></li>`);
+    if (current) items.push(`<li><button data-m="track">Opsi lagu yang diputar</button></li>`);
     if (localN) items.push(`<li><button data-m="clearlocal" class="danger">Kosongkan perangkat (${localN} lagu)</button></li>`);
     if (session && remoteN) items.push(`<li><button data-m="clearcloud" class="danger">Hapus semua di Google Drive (${remoteN} lagu)</button></li>`);
     openSheet(`<h3>Menu</h3><ul class="menu">${items.join("")}</ul>`);
@@ -976,7 +983,10 @@
       const m = b.dataset.m;
       if (m === "track") openTrackMenu(current.id);
       else if (m === "add") { closeSheet(); $("fileInput").click(); }
-      else if (m === "pick") { closeSheet(); importFromDrive(); }
+      else if (m === "pick") {
+        if (!session) { openAccount(); return; }
+        closeSheet(); importFromDrive();
+      }
       else if (m === "cloud") openAccount();
       else if (m === "clearlocal") confirmBig("Kosongkan perangkat?", remoteN
           ? `Semua file lagu di perangkat ini akan dihapus. Lagu yang sudah ada di cloud tetap aman dan bisa diunduh lagi. Lagu yang belum diunggah akan hilang.`
@@ -1102,20 +1112,13 @@
       return;
     }
     const remoteN = tracks.filter((t) => t.remote).length;
-    const notDl = tracks.filter((t) => t.remote && !t.local).length;
     const notUp = tracks.filter((t) => t.local && !t.remote).length;
     openSheet(`<h3>Google Drive</h3>
       <p class="sub">Masuk sebagai ${esc(session.email)}</p>
-      <div class="stat">Di Drive: <b>${remoteN} lagu</b> · Di perangkat: <b>${localN} lagu</b>${notDl ? `<br>${notDl} lagu belum diunduh` : ""}${notUp ? `<br>${notUp} lagu belum diunggah` : ""}</div>
-      ${storageLine}
-      <div class="row" style="margin-bottom:10px">
-        <button class="btn solid" data-a="sync">Sinkron</button>
-        ${notUp ? `<button class="btn" data-a="up">Unggah ${notUp}</button>` : ""}
-        ${notDl ? `<button class="btn" data-a="dl">Unduh ${notDl}</button>` : ""}
-      </div>
-      ${D.pickerEnabled() ? `<button class="btn solid" style="width:100%;margin-bottom:10px" data-a="pick">+ Ambil lagu dari Drive</button>` : ""}
+      <div class="stat">Di Google Drive: <b>${remoteN} lagu</b> · Di perangkat: <b>${localN} lagu</b>${notUp ? `<br>${notUp} lagu akan diunggah saat sinkron` : ""}</div>
+      <button class="btn solid" style="width:100%;margin-bottom:10px" data-a="sync">Sinkron</button>
       <button class="btn" style="width:100%" data-a="logout">Keluar</button>
-      <p class="tip">Taruh MP3 di folder "Saku" di Google Drive (misalnya dari laptop), lalu tekan AMBIL LAGU DARI DRIVE dan pilih semua. Lagu yang diunggah dari Saku tersimpan di folder yang sama.</p>
+      <p class="tip">SINKRON mengambil semua lagu Saku di Google Drive dan menyimpan lagu baru dari perangkat ini ke folder "Saku".</p>
       ${tip}`);
     $("sheetBody").onclick = (e) => {
       const b = e.target.closest("button[data-a]");
@@ -1123,9 +1126,6 @@
       const a = b.dataset.a;
       closeSheet();
       if (a === "sync") cloudAction(() => D.ensureFolder().catch(() => {}).then(() => sync()));
-      else if (a === "dl") cloudAction(() => downloadAll());
-      else if (a === "up") cloudAction(() => uploadPending());
-      else if (a === "pick") importFromDrive();
       else if (a === "logout") { D.signOut(); toast("Keluar. Lagu di perangkat tetap ada."); }
     };
   }
