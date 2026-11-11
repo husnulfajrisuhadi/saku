@@ -712,7 +712,7 @@
         seen.add(t.id);
       }
       for (const t of tracks.slice()) {
-        if (t.remote && !seen.has(t.id)) {
+        if (t.remote && !seen.has(t.id) && !(D.readAll() && t.outside)) {
           t.remote = false;
           t.driveId = null;
           if (!t.local) await removeLocalMeta(t);
@@ -831,7 +831,7 @@
         mime: doc.mimeType || "audio/mpeg",
         addedAt: Date.now() + added,
         local: false, remote: true, driveId: doc.id,
-        fromPicker: true
+        fromPicker: true, outside: !!doc.outside
       };
       tracks.push(t);
       await idb.put("tracks", t);
@@ -985,13 +985,38 @@
       else if (m === "add") { closeSheet(); $("fileInput").click(); }
       else if (m === "pick") {
         if (!session) { openAccount(); return; }
-        closeSheet(); importFromDrive();
+        openDriveImport();
       }
       else if (m === "cloud") openAccount();
       else if (m === "clearlocal") confirmBig("Kosongkan perangkat?", remoteN
           ? `Semua file lagu di perangkat ini akan dihapus. Lagu yang sudah ada di cloud tetap aman dan bisa diunduh lagi. Lagu yang belum diunggah akan hilang.`
           : `Semua ${localN} lagu di perangkat ini akan dihapus permanen.`, "Kosongkan", clearDevice);
       else if (m === "clearcloud") confirmBig("Hapus semua di Google Drive?", `Folder "Saku" beserta ${remoteN} lagu di Google Drive kamu akan dihapus permanen. Lagu yang sudah ada di perangkat ini tetap bisa diputar.`, "Hapus semua", () => cloudAction(clearCloud));
+    };
+  }
+
+  // Upload musik dari Google Drive: otomatis (izin baca folder) atau pilih manual
+  function openDriveImport() {
+    if (D.readAll()) {
+      closeSheet();
+      cloudAction(() => D.ensureFolder().catch(() => {}).then(() => sync()));
+      return;
+    }
+    openSheet(`<h3>Musik dari Google Drive</h3>
+      <p class="sub">Taruh MP3 di folder <b>"Saku"</b> di Google Drive, lalu pilih cara mengambilnya:</p>
+      <button class="btn solid" style="width:100%;margin-bottom:8px" data-d="auto">Ambil semua otomatis</button>
+      <p class="sub">Saku membaca semua lagu di folder Saku setiap kali SINKRON, termasuk lagu baru yang kamu taruh lewat Drive. Perlu izin tambahan sekali. Google akan menampilkan peringatan <b>"Google belum memverifikasi app ini"</b>: ketuk <b>Lanjutan → Buka Saku</b>, lalu centang izin melihat file Drive.</p>
+      <button class="btn" style="width:100%;margin-bottom:8px" data-d="manual">Pilih lagu manual</button>
+      <p class="sub">Tanpa izin tambahan. Kamu memilih lagunya sendiri di jendela Google Drive.</p>`);
+    $("sheetBody").onclick = (e) => {
+      const b = e.target.closest("button[data-d]");
+      if (!b) return;
+      closeSheet();
+      if (b.dataset.d === "manual") { importFromDrive(); return; }
+      D.enableReadAll()
+        .then(() => D.ensureFolder())
+        .then(() => { toast("Baca otomatis aktif. Mengambil lagu…", 0); return sync(); })
+        .catch((err) => toast(err.message || "Izin tidak diberikan"));
     };
   }
 
@@ -1118,7 +1143,7 @@
       <div class="stat">Di Google Drive: <b>${remoteN} lagu</b> · Di perangkat: <b>${localN} lagu</b>${notUp ? `<br>${notUp} lagu akan diunggah saat sinkron` : ""}</div>
       <button class="btn solid" style="width:100%;margin-bottom:10px" data-a="sync">Sinkron</button>
       <button class="btn" style="width:100%" data-a="logout">Keluar</button>
-      <p class="tip">SINKRON mengambil semua lagu Saku di Google Drive dan menyimpan lagu baru dari perangkat ini ke folder "Saku".</p>
+      <p class="tip">SINKRON mengambil semua lagu Saku di Google Drive dan menyimpan lagu baru dari perangkat ini ke folder "Saku".${D.readAll() ? " Baca otomatis folder Saku: AKTIF." : ""}</p>
       ${tip}`);
     $("sheetBody").onclick = (e) => {
       const b = e.target.closest("button[data-a]");
@@ -1161,7 +1186,7 @@
   $("btnEmptyDrive").addEventListener("click", () => {
     if (!D || !D.pickerEnabled()) { toast("Fitur Google Drive belum aktif"); return; }
     if (!session) { openAccount(); return; }
-    importFromDrive();
+    openDriveImport();
   });
   $("btnAccount").addEventListener("click", openAccount);
   $("btnView").addEventListener("click", () => {

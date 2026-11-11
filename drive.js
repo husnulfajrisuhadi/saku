@@ -7,6 +7,11 @@
   const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
   const LS_USER = "saku:google-user";
   const LS_TOKEN = "saku:google-token";
+  const LS_READALL = "saku:read-all";
+  // Izin opsional: baca semua isi folder Saku (termasuk file yang ditaruh lewat Google Drive)
+  const READ_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+  let readAll = false;
+  try { readAll = localStorage.getItem(LS_READALL) === "1"; } catch (e) {}
 
   let tokenClient = null;
   let token = null;
@@ -37,7 +42,7 @@
   }
 
   // Harus dipanggil langsung dari tap/klik pengguna, karena membuka jendela Google.
-  function requestToken(interactive) {
+  function requestToken(interactive, wantReadAll) {
     return new Promise((resolve, reject) => {
       if (!configured()) return reject(new Error("Login Google belum diaktifkan"));
       if (!ensureClient()) return reject(new Error("Layanan Google belum termuat. Cek internet lalu coba lagi"));
@@ -46,6 +51,10 @@
         if (!google.accounts.oauth2.hasGrantedAllScopes(resp, "https://www.googleapis.com/auth/drive.file")) {
           return reject(new Error("Izin Google Drive tidak diberikan. Centang izin Drive saat login"));
         }
+        const hasRead = google.accounts.oauth2.hasGrantedAnyScope(resp, READ_SCOPE);
+        if (wantReadAll && !hasRead) return reject(new Error("Izin baca folder tidak diberikan. Centang izin melihat file Google Drive"));
+        readAll = hasRead;
+        try { localStorage.setItem(LS_READALL, readAll ? "1" : "0"); } catch (e) {}
         token = resp.access_token;
         tokenExp = Date.now() + (Number(resp.expires_in || 3600) - 60) * 1000;
         try { localStorage.setItem(LS_TOKEN, JSON.stringify({ token, exp: tokenExp })); } catch (e) {}
@@ -63,7 +72,11 @@
       tokenClient.error_callback = (err) => {
         reject(new Error(err && err.type === "popup_closed" ? "Jendela login ditutup" : err && err.type === "popup_failed_to_open" ? "Pop-up diblokir. Izinkan pop-up untuk situs ini" : "Login Google gagal"));
       };
-      const opts = { prompt: interactive ? "select_account" : "" };
+      const opts = {
+        prompt: wantReadAll ? "consent" : interactive ? "select_account" : "",
+        scope: SCOPE + (wantReadAll || readAll ? " " + READ_SCOPE : ""),
+        include_granted_scopes: true
+      };
       if (user && user.email && !interactive) opts.login_hint = user.email;
       tokenClient.requestAccessToken(opts);
     });
@@ -77,7 +90,8 @@
 
   function signOut() {
     const t = token;
-    token = null; tokenExp = 0; user = null;
+    token = null; tokenExp = 0; user = null; readAll = false;
+    try { localStorage.removeItem(LS_READALL); } catch (e) {}
     try { localStorage.removeItem(LS_TOKEN); localStorage.removeItem(LS_USER); } catch (e) {}
     try { if (t && gisReady()) google.accounts.oauth2.revoke(t, () => {}); } catch (e) {}
     emit();
@@ -142,8 +156,14 @@
   async function list() {
     const out = [];
     let pageToken = "";
+    let base = "trashed=false and mimeType contains 'audio/'";
+    if (readAll) {
+      // Dengan izin baca, cukup isi folder Saku (supaya audio lain di Drive tidak ikut masuk)
+      const fid = await folderId(true);
+      base = `'${fid}' in parents and ` + base;
+    }
     do {
-      const q = encodeURIComponent(`trashed=false and mimeType contains 'audio/'`);
+      const q = encodeURIComponent(base);
       const r = await api(`${API}/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,size,mimeType,createdTime,appProperties)${pageToken ? "&pageToken=" + pageToken : ""}`);
       const j = await r.json();
       out.push(...(j.files || []));
@@ -231,7 +251,7 @@
         .setOrigin(location.protocol + "//" + location.host)
         .setTitle("Pilih lagu untuk Saku")
         .setCallback((data) => {
-          if (data.action === P.Action.PICKED) resolve((data.docs || []).map((x) => ({ id: x.id, name: x.name, mimeType: x.mimeType, size: x.sizeBytes })));
+          if (data.action === P.Action.PICKED) resolve((data.docs || []).map((x) => ({ id: x.id, name: x.name, mimeType: x.mimeType, size: x.sizeBytes, outside: !!fid && x.parentId !== fid })));
           else if (data.action === P.Action.CANCEL) resolve([]);
         })
         .build();
@@ -247,6 +267,8 @@
   window.SakuDrive = {
     configured, hasToken, withToken, requestToken, signOut,
     token: () => (hasToken() ? token : null),
+    readAll: () => readAll,
+    enableReadAll: () => requestToken(true, true),
     get user() { return user; },
     onChange: (fn) => listeners.add(fn),
     list, upload, download, remove, removeAll, updateMeta,
