@@ -13,10 +13,11 @@
   let readAll = false;
   try { readAll = localStorage.getItem(LS_READALL) === "1"; } catch (e) {}
 
-  let tokenClient = null;
+  let codeClient = null;
   let token = null;
   let tokenExp = 0;
   let user = null;
+  let silentInflight = null;
   const listeners = new Set();
 
   try { user = JSON.parse(localStorage.getItem(LS_USER) || "null"); } catch (e) {}
@@ -30,70 +31,132 @@
   const gisReady = () => !!(window.google && google.accounts && google.accounts.oauth2);
   const hasToken = () => !!token && Date.now() < tokenExp;
 
-  function ensureClient() {
-    if (tokenClient) return true;
-    if (!configured() || !gisReady()) return false;
-    tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: cfg.googleClientId,
-      scope: SCOPE,
-      callback: () => {}
-    });
-    return true;
+  // Simpan token baru dari server + perbarui status izin baca folder
+  async function accept(data, wantReadAll) {
+    const scope = String(data.scope || "");
+    if (!scope.includes("auth/drive.file")) throw new Error("Izin Google Drive tidak diberikan. Centang izin Drive saat login");
+    const hasRead = scope.includes(READ_SCOPE);
+    if (wantReadAll && !hasRead) throw new Error("Izin baca folder tidak diberikan. Centang izin melihat file Google Drive");
+    readAll = hasRead;
+    token = data.access_token;
+    tokenExp = Date.now() + (Number(data.expires_in || 3600) - 60) * 1000;
+    try {
+      localStorage.setItem(LS_READALL, readAll ? "1" : "0");
+      localStorage.setItem(LS_TOKEN, JSON.stringify({ token, exp: tokenExp }));
+    } catch (e) {}
+    // Beri tahu service worker supaya streaming bisa memakai token terbaru
+    try { navigator.serviceWorker && navigator.serviceWorker.controller && navigator.serviceWorker.controller.postMessage({ type: "token", token, exp: tokenExp }); } catch (e) {}
+    if (!user || !user.email) {
+      try {
+        const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: "Bearer " + token } });
+        if (r.ok) {
+          const u = await r.json();
+          user = { email: u.email, name: u.name || u.email, picture: u.picture || "" };
+          localStorage.setItem(LS_USER, JSON.stringify(user));
+        }
+      } catch (e) {}
+    }
+    emit();
+    return token;
   }
 
-  // Harus dipanggil langsung dari tap/klik pengguna, karena membuka jendela Google.
+  // Login pop-up Google (sekali). Kodenya ditukar di server supaya sesi bisa diperpanjang otomatis.
+  // Harus dipanggil langsung dari tap/klik pengguna.
+  // Cek sekali: server sudah siap untuk login permanen? Kalau belum, pakai token biasa (±1 jam).
+  let serverAuth = null;
+  fetch("/api/auth/status", { cache: "no-store" }).then((r) => r.json()).then((j) => { serverAuth = !!j.persistent; }).catch(() => { serverAuth = false; });
+
   function requestToken(interactive, wantReadAll) {
     return new Promise((resolve, reject) => {
       if (!configured()) return reject(new Error("Login Google belum diaktifkan"));
-      if (!ensureClient()) return reject(new Error("Layanan Google belum termuat. Cek internet lalu coba lagi"));
-      tokenClient.callback = async (resp) => {
-        if (resp.error) return reject(new Error(resp.error_description || resp.error));
-        if (!google.accounts.oauth2.hasGrantedAllScopes(resp, "https://www.googleapis.com/auth/drive.file")) {
-          return reject(new Error("Izin Google Drive tidak diberikan. Centang izin Drive saat login"));
+      if (!gisReady()) return reject(new Error("Layanan Google belum termuat. Cek internet lalu coba lagi"));
+      const scope = SCOPE + (wantReadAll || readAll ? " " + READ_SCOPE : "");
+      if (serverAuth === false) {
+        const tc = google.accounts.oauth2.initTokenClient({
+          client_id: cfg.googleClientId,
+          scope,
+          include_granted_scopes: true,
+          login_hint: user && user.email ? user.email : undefined,
+          prompt: wantReadAll || interactive ? "consent" : "",
+          callback: (resp) => {
+            if (resp.error) return reject(new Error(resp.error_description || resp.error));
+            accept(resp, wantReadAll).then(resolve, reject);
+          },
+          error_callback: (err) => reject(new Error(err && err.type === "popup_closed" ? "Jendela login ditutup" : err && err.type === "popup_failed_to_open" ? "Pop-up diblokir. Izinkan pop-up untuk situs ini" : "Login Google gagal"))
+        });
+        tc.requestAccessToken();
+        return;
+      }
+      codeClient = google.accounts.oauth2.initCodeClient({
+        client_id: cfg.googleClientId,
+        scope,
+        ux_mode: "popup",
+        include_granted_scopes: true,
+        login_hint: user && user.email ? user.email : undefined,
+        prompt: wantReadAll || interactive ? "consent" : "",
+        callback: async (resp) => {
+          if (resp.error) return reject(new Error(resp.error_description || resp.error));
+          try {
+            const r = await fetch("/api/auth/exchange", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({ code: resp.code })
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error("Login gagal (" + (j.error || r.status) + ")");
+            resolve(await accept(j, wantReadAll));
+          } catch (e) { reject(e); }
+        },
+        error_callback: (err) => {
+          reject(new Error(err && err.type === "popup_closed" ? "Jendela login ditutup" : err && err.type === "popup_failed_to_open" ? "Pop-up diblokir. Izinkan pop-up untuk situs ini" : "Login Google gagal"));
         }
-        const hasRead = google.accounts.oauth2.hasGrantedAnyScope(resp, READ_SCOPE);
-        if (wantReadAll && !hasRead) return reject(new Error("Izin baca folder tidak diberikan. Centang izin melihat file Google Drive"));
-        readAll = hasRead;
-        try { localStorage.setItem(LS_READALL, readAll ? "1" : "0"); } catch (e) {}
-        token = resp.access_token;
-        tokenExp = Date.now() + (Number(resp.expires_in || 3600) - 60) * 1000;
-        try { localStorage.setItem(LS_TOKEN, JSON.stringify({ token, exp: tokenExp })); } catch (e) {}
-        try {
-          const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: "Bearer " + token } });
-          if (r.ok) {
-            const u = await r.json();
-            user = { email: u.email, name: u.name || u.email, picture: u.picture || "" };
-            localStorage.setItem(LS_USER, JSON.stringify(user));
-          }
-        } catch (e) {}
-        emit();
-        resolve(token);
-      };
-      tokenClient.error_callback = (err) => {
-        reject(new Error(err && err.type === "popup_closed" ? "Jendela login ditutup" : err && err.type === "popup_failed_to_open" ? "Pop-up diblokir. Izinkan pop-up untuk situs ini" : "Login Google gagal"));
-      };
-      const opts = {
-        prompt: wantReadAll ? "consent" : interactive ? "select_account" : "",
-        scope: SCOPE + (wantReadAll || readAll ? " " + READ_SCOPE : ""),
-        include_granted_scopes: true
-      };
-      if (user && user.email && !interactive) opts.login_hint = user.email;
-      tokenClient.requestAccessToken(opts);
+      });
+      codeClient.requestCode();
     });
   }
 
-  // Pastikan ada token yang masih berlaku; kalau habis, minta lagi (perlu tap pengguna).
-  function withToken() {
-    if (hasToken()) return Promise.resolve(token);
+  // Perpanjang sesi diam-diam lewat server (tanpa pop-up). Null kalau belum pernah login permanen.
+  function refreshSilent() {
+    if (silentInflight) return silentInflight;
+    silentInflight = (async () => {
+      try {
+        const r = await fetch("/api/auth/token", { credentials: "same-origin", cache: "no-store" });
+        if (!r.ok) return null;
+        return await accept(await r.json());
+      } catch (e) {
+        return null;
+      } finally {
+        setTimeout(() => { silentInflight = null; }, 0);
+      }
+    })();
+    return silentInflight;
+  }
+
+  // Token yang masih berlaku: dari memori, diperpanjang diam-diam, atau (terakhir) login ulang.
+  async function withToken() {
+    if (hasToken()) return token;
+    if (user) {
+      const t = await refreshSilent();
+      if (t) return t;
+    }
     return requestToken(false);
   }
 
+  // Perpanjang token sebelum habis supaya streaming di layar terkunci tidak terputus
+  setInterval(() => {
+    if (user && token && tokenExp - Date.now() < 10 * 60 * 1000) refreshSilent();
+  }, 60 * 1000);
+
   function signOut() {
-    const t = token;
     token = null; tokenExp = 0; user = null; readAll = false;
-    try { localStorage.removeItem(LS_READALL); } catch (e) {}
-    try { localStorage.removeItem(LS_TOKEN); localStorage.removeItem(LS_USER); } catch (e) {}
-    try { if (t && gisReady()) google.accounts.oauth2.revoke(t, () => {}); } catch (e) {}
+    try {
+      localStorage.removeItem(LS_READALL);
+      localStorage.removeItem(LS_TOKEN);
+      localStorage.removeItem(LS_USER);
+    } catch (e) {}
+    fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+    try { navigator.serviceWorker && navigator.serviceWorker.controller && navigator.serviceWorker.controller.postMessage({ type: "token", token: null, exp: 0 }); } catch (e) {}
     emit();
   }
 
@@ -102,6 +165,9 @@
     const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: "Bearer " + tk } });
     if (res.status === 401) {
       token = null; tokenExp = 0;
+      // Coba perpanjang diam-diam sekali, lalu ulangi permintaan
+      const t2 = user ? await refreshSilent() : null;
+      if (t2 && !opts.__retried) return api(url, { ...opts, __retried: true });
       throw new Error("Sesi Google habis. Tekan tombol lagi untuk masuk ulang");
     }
     if (!res.ok) {
@@ -264,8 +330,37 @@
     return r.json();
   }
 
+
+  // ---------- Playlist: disimpan sebagai saku-playlists.json di folder Saku ----------
+  const PL_NAME = "saku-playlists.json";
+  async function findPlaylistFile() {
+    const fid = await folderId(true);
+    const q = encodeURIComponent(`name='${PL_NAME}' and '${fid}' in parents and trashed=false`);
+    const r = await api(`${API}/files?q=${q}&fields=files(id,modifiedTime)&spaces=drive`);
+    const j = await r.json();
+    return { fid, file: j.files && j.files[0] };
+  }
+  async function readPlaylists() {
+    const { file } = await findPlaylistFile();
+    if (!file) return null;
+    const r = await api(`${API}/files/${file.id}?alt=media`);
+    try { return await r.json(); } catch (e) { return null; }
+  }
+  async function writePlaylists(data) {
+    const { fid, file } = await findPlaylistFile();
+    const body = JSON.stringify(data);
+    if (file) {
+      await api(`${UPLOAD}/${file.id}?uploadType=media`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body });
+      return;
+    }
+    const boundary = "saku" + Math.random().toString(36).slice(2);
+    const meta = JSON.stringify({ name: PL_NAME, parents: [fid], mimeType: "application/json" });
+    const multipart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${boundary}--`;
+    await api(`${UPLOAD}?uploadType=multipart&fields=id`, { method: "POST", headers: { "Content-Type": "multipart/related; boundary=" + boundary }, body: multipart });
+  }
+
   window.SakuDrive = {
-    configured, hasToken, withToken, requestToken, signOut,
+    configured, hasToken, withToken, requestToken, signOut, refreshSilent,
     token: () => (hasToken() ? token : null),
     readAll: () => readAll,
     enableReadAll: () => requestToken(true, true),
@@ -273,7 +368,7 @@
     onChange: (fn) => listeners.add(fn),
     list, upload, download, remove, removeAll, updateMeta,
     ensureFolder: () => folderId(true),
-    pick, fileInfo,
+    pick, fileInfo, readPlaylists, writePlaylists,
     pickerEnabled: () => configured() && !!cfg.googleApiKey
   };
 })();

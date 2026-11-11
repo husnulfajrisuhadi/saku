@@ -1,5 +1,5 @@
 // Cache tampilan aplikasi supaya Saku tetap terbuka tanpa internet.
-const CACHE = "saku-v5";
+const CACHE = "saku-v7";
 const SHELL = [
   "/",
   "/index.html",
@@ -30,6 +30,37 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+// Token Google terbaru (dikirim halaman, atau diperpanjang sendiri lewat /api/auth/token)
+let swToken = null;
+let swTokenExp = 0;
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "token") { swToken = e.data.token; swTokenExp = e.data.exp || 0; }
+});
+async function freshToken() {
+  try {
+    const r = await fetch("/api/auth/token", { credentials: "same-origin", cache: "no-store" });
+    if (!r.ok) return null;
+    const j = await r.json();
+    swToken = j.access_token;
+    swTokenExp = Date.now() + (Number(j.expires_in || 3600) - 60) * 1000;
+    return swToken;
+  } catch (err) { return null; }
+}
+async function streamDrive(id, urlToken, range) {
+  let tk = swToken && Date.now() < swTokenExp ? swToken : urlToken;
+  const go = (t) => {
+    const headers = { Authorization: "Bearer " + t };
+    if (range) headers.Range = range;
+    return fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers });
+  };
+  let res = await go(tk);
+  if (res.status === 401) {
+    const t2 = await freshToken();
+    if (t2) res = await go(t2);
+  }
+  return res;
+}
+
 self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
@@ -38,12 +69,10 @@ self.addEventListener("fetch", (e) => {
   // Streaming lagu dari Google Drive: tambahkan token login ke request supaya <audio> bisa memutar langsung
   if (url.origin === self.location.origin && url.pathname.startsWith("/__drive/")) {
     const id = decodeURIComponent(url.pathname.slice(9));
-    const headers = { Authorization: "Bearer " + (url.searchParams.get("t") || "") };
-    const range = req.headers.get("range");
-    if (range) headers.Range = range;
-    e.respondWith(fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers }));
+    e.respondWith(streamDrive(id, url.searchParams.get("t") || "", req.headers.get("range")));
     return;
   }
+  if (url.pathname.startsWith("/api/")) return; // server login selalu ke jaringan
 
   if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
     // Font: versi tetap, jadi cukup cache-first

@@ -138,7 +138,7 @@
   const byId = (id) => tracks.find((t) => t.id === id);
   // Bisa diputar: tersimpan di perangkat, atau ada di Drive (diputar streaming saat online & login)
   const playable = (t) => t && (t.local || (t.remote && t.driveId && session));
-  const canStream = () => !!(D && session && D.hasToken() && navigator.onLine && navigator.serviceWorker && navigator.serviceWorker.controller);
+  const canStream = () => !!(D && session && navigator.onLine && navigator.serviceWorker && navigator.serviceWorker.controller);
   let streaming = false;
 
   function sortedTracks() {
@@ -147,9 +147,67 @@
     else list.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
     return list;
   }
+  // ---------- Playlist & favorit ----------
+  const LS_PL = "saku:playlists";
+  let playlists = [];
+  try { playlists = JSON.parse(localStorage.getItem(LS_PL) || "[]"); } catch (e) {}
+  if (!playlists.find((p) => p.id === "fav")) playlists.unshift({ id: "fav", name: "Favorit", trackIds: [], updatedAt: 0 });
+  let libMode = "all"; // "all" | "pls" | id playlist
+  const livePl = () => playlists.filter((p) => !p.deleted);
+  const plById = (id) => playlists.find((p) => p.id === id && !p.deleted);
+  const isPlMode = () => libMode !== "all" && libMode !== "pls";
+  let plPushTimer;
+  function savePlaylists(push = true) {
+    try { localStorage.setItem(LS_PL, JSON.stringify(playlists)); } catch (e) {}
+    if (push && session) { clearTimeout(plPushTimer); plPushTimer = setTimeout(pushPlaylists, 1500); }
+  }
+  async function pushPlaylists() {
+    if (!D || !session || !navigator.onLine) return;
+    if (!D.hasToken() && !(await D.refreshSilent())) return;
+    try { await D.writePlaylists({ v: 1, playlists }); } catch (e) { console.warn(e); }
+  }
+  function mergePlaylists(remote) {
+    if (!remote || !Array.isArray(remote.playlists)) return false;
+    let changed = false;
+    for (const r of remote.playlists) {
+      const l = playlists.find((p) => p.id === r.id);
+      if (!l) { playlists.push(r); changed = true; }
+      else if ((r.updatedAt || 0) > (l.updatedAt || 0)) { Object.assign(l, r); changed = true; }
+    }
+    return changed;
+  }
+  const inPl = (pid, tid) => { const p = plById(pid); return !!p && p.trackIds.includes(tid); };
+  function togglePl(pid, tid) {
+    const p = plById(pid);
+    if (!p) return;
+    const i = p.trackIds.indexOf(tid);
+    if (i >= 0) p.trackIds.splice(i, 1); else p.trackIds.push(tid);
+    p.updatedAt = Date.now();
+    savePlaylists();
+    render();
+    updateFavBtn();
+  }
+  function createPl(name) {
+    const p = { id: "p_" + uuid(), name: name.trim().slice(0, 60) || "Playlist", trackIds: [], updatedAt: Date.now() };
+    playlists.push(p);
+    savePlaylists();
+    return p;
+  }
+  function updateFavBtn() {
+    const b = $("btnFav");
+    if (b) b.classList.toggle("on", !!current && inPl("fav", current.id));
+  }
+
+  function baseList() {
+    if (isPlMode()) {
+      const p = plById(libMode);
+      return p ? p.trackIds.map(byId).filter(Boolean) : [];
+    }
+    return sortedTracks();
+  }
   function visibleTracks() {
     const q = query.trim().toLowerCase();
-    const list = sortedTracks();
+    const list = baseList();
     if (!q) return list;
     return list.filter((t) => (t.title + " " + (t.artist || "") + " " + (t.album || "")).toLowerCase().includes(q));
   }
@@ -179,13 +237,30 @@
     const list = visibleTracks();
     const total = tracks.length;
     const localCount = tracks.filter((t) => t.local).length;
-    $("countLabel").textContent = query ? `${list.length}/${total} LAGU` : `${total} LAGU`;
-    $("emptyState").hidden = total > 0;
+    $("countLabel").textContent = query && libMode === "all" ? `${list.length}/${total}` : `${total}`;
+    $("emptyState").hidden = total > 0 || libMode !== "all";
     $("btnSort").textContent = prefs.sort === "az" ? "A-Z" : "BARU";
-    $("btnShuffleAll").disabled = localCount === 0;
+    $("btnShuffleAll").disabled = !list.some(playable);
+    $("cloudDot").hidden = !session;
+    $("stCloud").className = session ? "" : "st-off";
+    $("tabAll").classList.toggle("on", libMode === "all");
+    $("tabPl").classList.toggle("on", libMode === "pls");
+    $("libHead").hidden = isPlMode();
+    $("plHead").hidden = !isPlMode();
+    $("btnSort").hidden = libMode !== "all";
+    $("btnShuffleAll").hidden = libMode !== "all";
+    if (libMode === "pls") { renderPlaylists(); return; }
+    if (isPlMode()) {
+      const p = plById(libMode);
+      $("plTitle").textContent = p ? `${p.name} · ${list.length}` : "";
+      if (!list.length) {
+        $("trackList").innerHTML = `<li class="list-note">${query ? "Tidak ada lagu yang cocok." : "Playlist ini masih kosong.<br>Tambahkan lagu lewat tombol [:] di samping judul lagu, lalu pilih TAMBAH KE PLAYLIST."}</li>`;
+        return;
+      }
+    }
 
     const remoteOnly = tracks.filter((t) => !t.local && t.remote).length;
-    $("cloudBanner").hidden = remoteOnly === 0;
+    $("cloudBanner").hidden = true;
     $("cloudBannerTitle").textContent = `${remoteOnly} LAGU DI DRIVE (STREAMING)`;
 
     const playingId = current?.id;
@@ -205,6 +280,25 @@
     }).join("");
     $("cloudDot").hidden = !session;
     $("stCloud").className = session ? "" : "st-off";
+  }
+
+  const HEART = '<svg viewBox="0 0 9 8" shape-rendering="crispEdges"><path d="M1 0h2v1H1zM6 0h2v1H6zM0 1h4v1H0zM5 1h4v1H5zM0 2h9v2H0zM1 4h7v1H1zM2 5h5v1H2zM3 6h3v1H3zM4 7h1v1H4z"/></svg>';
+  const NOTE = '<svg viewBox="0 0 10 8" shape-rendering="crispEdges"><path d="M4 0h6v2H4zM4 2h1v3H4zM9 2h1v3H9zM2 5h3v2H2zM1 6h1v1H1zM7 5h3v2H7zM6 6h1v1H6zM2 7h2v1H2zM7 7h2v1H7z"/></svg>';
+  function renderPlaylists() {
+    const q = query.trim().toLowerCase();
+    const rows = livePl()
+      .filter((p) => !q || p.name.toLowerCase().includes(q))
+      .map((p) => {
+        const n = p.trackIds.filter((id) => byId(id)).length;
+        return `<li class="pl-row" data-pl="${p.id}">
+          <span class="no">${p.id === "fav" ? HEART : NOTE}</span>
+          <div class="t">${esc(p.name)}</div>
+          <span class="d">${n} LAGU</span>
+          <button class="more" data-plmore="${p.id}" aria-label="Opsi playlist">[:]</button>
+        </li>`;
+      });
+    rows.push(`<li class="pl-row new" data-plnew="1"><span class="no">+</span><div class="t">Playlist baru</div><span></span><span></span></li>`);
+    $("trackList").innerHTML = rows.join("");
   }
 
   // ---------- Pemutar ----------
@@ -327,9 +421,9 @@
       url = await blobUrlFor(id);
       if (!url) { toast("File lagu tidak ditemukan di perangkat"); return; }
       streaming = false;
-    } else if (canStream()) {
+    } else if (canStream() && (D.hasToken() || await D.refreshSilent())) {
       // Streaming langsung dari Google Drive lewat service worker (mendukung lompat posisi)
-      url = `/__drive/${encodeURIComponent(t.driveId)}?t=${encodeURIComponent(D.token())}`;
+      url = `/__drive/${encodeURIComponent(t.driveId)}?t=${encodeURIComponent(D.token() || "")}`;
       streaming = true;
     } else if (!navigator.onLine) {
       toast("Lagu ini belum diunduh dan tidak ada internet");
@@ -390,6 +484,7 @@
     const u = coverUrls.get(t.id);
     cover.style.backgroundImage = u ? `url('${u}')` : "";
     cover.classList.toggle("has-art", !!u);
+    updateFavBtn();
     fitMarquee();
     setPlayIcons();
     render();
@@ -506,15 +601,54 @@
   audio.addEventListener("ended", () => next(true));
   audio.addEventListener("error", () => {
     if (!current || !audio.src) return;
-    if (streaming && (!D.hasToken() || !navigator.onLine)) {
-      toast(!navigator.onLine ? "Streaming terputus: tidak ada internet" : "Sesi Google habis. Tekan play untuk masuk ulang");
+    if (streaming && !navigator.onLine) { toast("Streaming terputus: tidak ada internet"); return; }
+    if (streaming && !D.hasToken()) {
+      const id = current.id, pos = audio.currentTime || 0;
+      D.refreshSilent().then((t) => {
+        if (t) loadTrack(id, true, pos);
+        else toast("Sesi Google habis. Tekan play untuk masuk ulang");
+      });
       return;
     }
     toast("Lagu ini tidak bisa diputar, lanjut ke berikutnya");
     setTimeout(() => next(true), 600);
   });
+  // Simpan diam-diam lagu yang sedang di-stream supaya lain kali bisa diputar offline
+  const quietTried = new Set();
+  let quietBusy = false;
+  async function cacheQuietly(t) {
+    if (!t || t.local || !t.driveId || quietBusy || quietTried.has(t.id)) return;
+    quietTried.add(t.id);
+    quietBusy = true;
+    try {
+      const data = await D.download(t.driveId);
+      const blob = data.type && data.type.startsWith("audio/") ? data : new Blob([data], { type: t.mime || "audio/mpeg" });
+      await putBlob(t.id, blob);
+      const tags = await window.readID3(blob);
+      if (tags.cover) {
+        await idb.put("covers", tags.cover, t.id);
+        if (!coverUrls.has(t.id)) coverUrls.set(t.id, URL.createObjectURL(tags.cover));
+      }
+      if (t.fromPicker) {
+        if (tags.title) t.title = tags.title;
+        if (tags.artist) t.artist = tags.artist;
+        if (tags.album) t.album = tags.album;
+        delete t.fromPicker;
+      }
+      t.local = true;
+      await idb.put("tracks", t);
+      if (current && current.id === t.id) { showNowPlaying(); makeArtwork(t.id).then(updateMediaSession); }
+      else render();
+    } catch (e) {
+      /* diam saja; dicoba lagi lain kali app dibuka */
+    } finally {
+      quietBusy = false;
+    }
+  }
+
   let lastSave = 0;
   audio.addEventListener("timeupdate", () => {
+    if (streaming && current && !current.local && audio.currentTime > 20) cacheQuietly(current);
     const d = audio.duration, c = audio.currentTime;
     const p = isFinite(d) && d > 0 ? (c / d) * 100 : 0;
     if (!seeking) {
@@ -719,6 +853,15 @@
           else await idb.put("tracks", t);
         }
       }
+      try {
+        const remotePl = await D.readPlaylists();
+        if (mergePlaylists(remotePl)) savePlaylists(false);
+        const needPush = !remotePl || playlists.some((l) => {
+          const r = remotePl.playlists && remotePl.playlists.find((x) => x.id === l.id);
+          return !r || (l.updatedAt || 0) > (r.updatedAt || 0);
+        });
+        if (needPush && playlists.some((p) => p.updatedAt)) await pushPlaylists();
+      } catch (e) { console.warn("playlist sync", e); }
       const pending = tracks.filter((t) => t.local && !t.remote);
       syncing = false;
       render();
@@ -974,6 +1117,8 @@
     items.push(`<li><button data-m="add">Upload musik dari perangkat</button></li>`);
     if (D && D.pickerEnabled()) items.push(`<li><button data-m="pick">Upload musik dari Google Drive</button></li>`);
     if (current) items.push(`<li><button data-m="track">Opsi lagu yang diputar</button></li>`);
+    const notDl = tracks.filter((t) => t.remote && !t.local).length;
+    if (session && notDl) items.push(`<li><button data-m="offline">Simpan semua untuk offline (${notDl} lagu)</button></li>`);
     if (localN) items.push(`<li><button data-m="clearlocal" class="danger">Kosongkan perangkat (${localN} lagu)</button></li>`);
     if (session && remoteN) items.push(`<li><button data-m="clearcloud" class="danger">Hapus semua di Google Drive (${remoteN} lagu)</button></li>`);
     openSheet(`<h3>Menu</h3><ul class="menu">${items.join("")}</ul>`);
@@ -982,6 +1127,7 @@
       if (!b) return;
       const m = b.dataset.m;
       if (m === "track") openTrackMenu(current.id);
+      else if (m === "offline") { closeSheet(); cloudAction(() => downloadAll()); }
       else if (m === "add") { closeSheet(); $("fileInput").click(); }
       else if (m === "pick") {
         if (!session) { openAccount(); return; }
@@ -1040,7 +1186,11 @@
     const t = byId(id);
     if (!t) return;
     const items = [];
-    if (t.local) items.push(`<li><button data-act="playnext">Putar berikutnya</button></li>`);
+    if (playable(t)) items.push(`<li><button data-act="playnext">Putar berikutnya</button></li>`);
+    if (playable(t) && current) items.push(`<li><button data-act="enqueue">Tambah ke antrian</button></li>`);
+    items.push(`<li><button data-act="fav">${inPl("fav", t.id) ? "Hapus dari Favorit" : "Tambah ke Favorit"}</button></li>`);
+    items.push(`<li><button data-act="addpl">Tambah ke playlist…</button></li>`);
+    if (isPlMode() && libMode !== "fav" && inPl(libMode, t.id)) items.push(`<li><button data-act="rmpl">Hapus dari playlist ini</button></li>`);
     items.push(`<li><button data-act="rename">Ubah judul & artis</button></li>`);
     if (!t.local && t.remote) items.push(`<li><button data-act="download">Unduh untuk offline</button></li>`);
     if (t.local && !t.remote && session) items.push(`<li><button data-act="upload">Simpan ke Google Drive</button></li>`);
@@ -1060,6 +1210,26 @@
         prefetchNext();
         closeSheet();
         toast("Diputar setelah lagu ini");
+      } else if (act === "enqueue") {
+        if (!queue.includes(t.id) || queue.indexOf(t.id) <= qIndex) {
+          queue = queue.filter((x, i) => x !== t.id || i === qIndex);
+          qIndex = queue.indexOf(current.id);
+          queue.push(t.id);
+        }
+        closeSheet();
+        toast("Ditambahkan ke antrian");
+        if (view === "now") showNowPlaying();
+      } else if (act === "fav") {
+        const on = !inPl("fav", t.id);
+        togglePl("fav", t.id);
+        closeSheet();
+        toast(on ? "Ditambahkan ke Favorit" : "Dihapus dari Favorit");
+      } else if (act === "addpl") {
+        openAddToPl(t);
+      } else if (act === "rmpl") {
+        togglePl(libMode, t.id);
+        closeSheet();
+        toast("Dihapus dari playlist");
       } else if (act === "rename") {
         openRename(t);
       } else if (act === "download") {
@@ -1073,6 +1243,111 @@
       }
     };
   }
+  function openAddToPl(t) {
+    const rows = livePl().map((p) => `<li><button data-pid="${p.id}">${inPl(p.id, t.id) ? "[x] " : "[ ] "}${esc(p.name)}</button></li>`);
+    rows.push(`<li><button data-pid="__new">+ Playlist baru</button></li>`);
+    openSheet(`${trackHeader(t)}<ul class="menu">${rows.join("")}</ul>`);
+    $("sheetBody").onclick = (e) => {
+      const b = e.target.closest("button[data-pid]");
+      if (!b) return;
+      if (b.dataset.pid === "__new") { openPlName(null, t); return; }
+      togglePl(b.dataset.pid, t.id);
+      openAddToPl(t);
+    };
+  }
+  function openPlName(pid, addTrack) {
+    const p = pid ? plById(pid) : null;
+    openSheet(`<h3>${p ? "Ganti nama playlist" : "Playlist baru"}</h3>
+      <label class="field"><span>Nama</span><input id="plName" maxlength="60" value="${p ? esc(p.name) : ""}" placeholder="Misal: Lagu santai" /></label>
+      <div class="row"><button class="btn" data-c="no">Batal</button><button class="btn solid" data-c="yes">Simpan</button></div>`);
+    setTimeout(() => $("plName") && $("plName").focus(), 250);
+    $("sheetBody").onclick = (e) => {
+      const b = e.target.closest("button[data-c]");
+      if (!b) return;
+      if (b.dataset.c === "no") { closeSheet(); return; }
+      const name = $("plName").value.trim();
+      if (!name) { toast("Isi nama playlist dulu"); return; }
+      if (p) { p.name = name.slice(0, 60); p.updatedAt = Date.now(); savePlaylists(); }
+      else {
+        const np = createPl(name);
+        if (addTrack) { np.trackIds.push(addTrack.id); np.updatedAt = Date.now(); savePlaylists(); toast(`Ditambahkan ke ${np.name}`); }
+      }
+      closeSheet();
+      render();
+    };
+  }
+  function openPlMenu(pid) {
+    const p = plById(pid);
+    if (!p) return;
+    const items = [`<li><button data-a="play">Putar</button></li>`];
+    if (pid !== "fav") {
+      items.push(`<li><button data-a="rename">Ganti nama</button></li>`);
+      items.push(`<li><button data-a="del" class="danger">Hapus playlist</button></li>`);
+    }
+    openSheet(`<h3>${esc(p.name)}</h3><p class="sub">${p.trackIds.filter((id) => byId(id)).length} lagu</p><ul class="menu">${items.join("")}</ul>`);
+    $("sheetBody").onclick = (e) => {
+      const b = e.target.closest("button[data-a]");
+      if (!b) return;
+      if (b.dataset.a === "play") {
+        closeSheet();
+        const list = p.trackIds.map(byId).filter(playable);
+        if (!list.length) { toast("Belum ada lagu yang bisa diputar"); return; }
+        buildQueue(list[0].id, list);
+        loadTrack(queue[qIndex] || list[0].id, true);
+      } else if (b.dataset.a === "rename") openPlName(pid);
+      else if (b.dataset.a === "del") {
+        openSheet(`<h3>Hapus "${esc(p.name)}"?</h3><p class="sub">Lagunya tidak ikut terhapus.</p>
+          <div class="row"><button class="btn" data-c="no">Batal</button><button class="btn solid" data-c="yes">Hapus</button></div>`);
+        $("sheetBody").onclick = (ev) => {
+          const c = ev.target.closest("button[data-c]");
+          if (!c) return;
+          if (c.dataset.c === "yes") {
+            p.deleted = true; p.trackIds = []; p.updatedAt = Date.now();
+            savePlaylists();
+            if (libMode === pid) libMode = "pls";
+            render();
+          }
+          closeSheet();
+        };
+      }
+    };
+  }
+
+  // ---------- Antrian ----------
+  function openQueue() {
+    if (!current || !queue.length) { toast("Antrian kosong"); return; }
+    qIndex = Math.max(0, queue.indexOf(current.id));
+    const up = queue.slice(qIndex);
+    const rows = up.map((id, i) => {
+      const t = byId(id);
+      if (!t) return "";
+      const now = i === 0;
+      return `<li class="qrow${now ? " now" : ""}">
+        <span class="no">${now ? "&gt;" : String(i).padStart(2, "0")}</span>
+        <div class="info"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist || "Artis tidak diketahui")}</div></div>
+        ${now ? "<span></span><span></span>" : `<button class="lcd-btn" data-qup="${qIndex + i}" aria-label="Naikkan" ${i === 1 ? "disabled" : ""}>NAIK</button><button class="lcd-btn" data-qrm="${qIndex + i}" aria-label="Hapus dari antrian">X</button>`}
+      </li>`;
+    }).join("");
+    const rep = prefs.repeat === "all" && qIndex > 0 ? `<p class="sub">Repeat semua aktif: setelah ini kembali ke awal antrian.</p>` : "";
+    openSheet(`<h3>Antrian · ${up.length} lagu</h3>${rep}<ul class="qlist">${rows}</ul>`);
+    $("sheetBody").onclick = (e) => {
+      const upB = e.target.closest("[data-qup]");
+      const rmB = e.target.closest("[data-qrm]");
+      if (upB) {
+        const i = Number(upB.dataset.qup);
+        if (i - 1 > qIndex) [queue[i - 1], queue[i]] = [queue[i], queue[i - 1]];
+      } else if (rmB) {
+        queue.splice(Number(rmB.dataset.qrm), 1);
+      } else return;
+      qIndex = queue.indexOf(current.id);
+      if (prefetched) { URL.revokeObjectURL(prefetched.url); prefetched = null; }
+      prefetchNext();
+      showNowPlaying();
+      openQueue();
+    };
+  }
+  $("btnQueue").addEventListener("click", openQueue);
+
   function confirmSheet(t, msg, fn) {
     openSheet(`${trackHeader(t)}<p class="sub">${esc(msg)}</p>
       <div class="row"><button class="btn" data-c="no">Batal</button><button class="btn solid" data-c="yes">Hapus</button></div>`);
@@ -1164,6 +1439,11 @@
 
   // ---------- Event UI ----------
   $("trackList").addEventListener("click", (e) => {
+    const plm = e.target.closest("[data-plmore]");
+    if (plm) { e.stopPropagation(); openPlMenu(plm.dataset.plmore); return; }
+    if (e.target.closest("[data-plnew]")) { openPlName(null); return; }
+    const plr = e.target.closest("[data-pl]");
+    if (plr) { libMode = plr.dataset.pl; query = ""; $("search").value = ""; render(); $("trackList").scrollTop = 0; return; }
     const more = e.target.closest("[data-more]");
     if (more) { e.stopPropagation(); openTrackMenu(more.dataset.more); return; }
     const li = e.target.closest(".track");
@@ -1181,6 +1461,24 @@
     const start = list[Math.floor(Math.random() * list.length)].id;
     buildQueue(start, list);
     loadTrack(start, true);
+  });
+  $("tabAll").addEventListener("click", () => { libMode = "all"; render(); });
+  $("tabPl").addEventListener("click", () => { libMode = "pls"; render(); });
+  $("plBack").addEventListener("click", () => { libMode = "pls"; query = ""; $("search").value = ""; render(); });
+  $("plMore").addEventListener("click", () => isPlMode() && openPlMenu(libMode));
+  $("plShuffle").addEventListener("click", () => {
+    const list = visibleTracks().filter(playable);
+    if (!list.length) { toast("Belum ada lagu yang bisa diputar"); return; }
+    if (!prefs.shuffle) { prefs.shuffle = true; savePrefs(); setModeIcons(); }
+    const start = list[Math.floor(Math.random() * list.length)].id;
+    buildQueue(start, list);
+    loadTrack(start, true);
+  });
+  $("btnFav").addEventListener("click", () => {
+    if (!current) return;
+    const on = !inPl("fav", current.id);
+    togglePl("fav", current.id);
+    toast(on ? "Ditambahkan ke Favorit" : "Dihapus dari Favorit");
   });
   $("btnDownloadAll").addEventListener("click", () => cloudAction(() => downloadAll()));
   $("btnEmptyDrive").addEventListener("click", () => {

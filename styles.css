@@ -157,7 +157,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .track .t { font-size: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; }
 .track .a { font-size: 17px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .track .d { font-size: 18px; }
-.track .more { height: 28px; font-size: 18px; letter-spacing: -1px; }
+.track .more, .pl-row .more { height: 28px; font-size: 18px; letter-spacing: -1px; }
 .track:active { background: var(--ink-ghost); }
 .track.playing { background: var(--ink); color: var(--lcd); }
 .track.playing .no, .track.playing .a { color: rgba(166,189,128,.75); }
@@ -359,3 +359,30 @@ svg.kicon { width: 14px; height: 11px; fill: currentColor; }
 
 .gbtn { gap: 10px; }
 .gbtn .g { display: inline-grid; place-items: center; width: 24px; height: 24px; background: var(--lcd); color: var(--ink); font-size: 20px; }
+
+.lib-tabs { display: flex; gap: 6px; }
+.lcd-btn.tab { border-color: var(--ink-soft); color: var(--ink-soft); }
+.lcd-btn.tab.on { border-color: var(--ink); background: var(--ink); color: var(--lcd); }
+.pl-head { gap: 6px; }
+.pl-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; font-size: 22px; }
+.pl-row { display: grid; grid-template-columns: 30px 1fr auto 28px; align-items: center; gap: 6px; padding: 7px 4px 7px 10px; cursor: pointer; }
+.pl-row:active { background: var(--ink-ghost); }
+.pl-row .t { font-size: 22px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-row .no svg { width: 18px; height: 16px; fill: var(--ink); }
+.pl-row .d { font-size: 18px; color: var(--ink-soft); }
+.pl-row.new .t { color: var(--ink-soft); }
+.list-note { padding: 18px 14px; font-size: 19px; color: var(--ink-soft); text-align: center; line-height: 1.15; }
+.now-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.fav-btn { width: 34px; height: 30px; display: grid; place-items: center; }
+.fav-btn svg { width: 22px; height: 20px; fill: none; stroke: var(--ink); stroke-width: .6; }
+.fav-btn.on svg { fill: var(--ink); stroke: none; }
+.queue-btn { display: block; margin: 10px auto 0; }
+.sheet .menu button .chk { margin-left: auto; }
+.qrow { display: grid; grid-template-columns: 28px 1fr auto auto; gap: 6px; align-items: center; padding: 6px 2px; border-bottom: 1px dashed var(--ink-soft); }
+.qrow .t { font-size: 20px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qrow .a { font-size: 16px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qrow .no { font-size: 17px; color: var(--ink-soft); }
+.qrow button { font-size: 20px; padding: 0 6px; border: 2px solid var(--ink); height: 30px; }
+.qrow.now { background: var(--ink); color: var(--lcd); }
+.qrow.now .a, .qrow.now .no { color: rgba(166,189,128,.75); }
+.qlist { list-style: none; margin: 0 0 10px; padding: 0; max-height: 52dvh; overflow-y: auto; border-top: 2px solid var(--ink); }
